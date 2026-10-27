@@ -1,0 +1,4 @@
+node_modules/
+.murmurplex/
+*.vsix
+.DS_Store

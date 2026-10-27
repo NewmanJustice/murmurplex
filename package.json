@@ -1,0 +1,97 @@
+{
+  "name": "murmurplex",
+  "displayName": "Murmurplex",
+  "description": "A persistent workspace for terminal agents and their coordinator.",
+  "version": "0.0.1",
+  "publisher": "murmurplex",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0",
+    "node": ">=20"
+  },
+  "main": "./src/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:murmurplex.agents"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/extension.js && node --check src/service.js && node --check src/store.js && node --check bin/murmurplex-agent",
+    "test:vscode": "node scripts/test-vscode.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "murmurplex.start",
+        "title": "Murmurplex: Start or Resume Project"
+      },
+      {
+        "command": "murmurplex.addPane",
+        "title": "Murmurplex: Add Agent Terminal Group"
+      },
+      {
+        "command": "murmurplex.addTab",
+        "title": "Murmurplex: Add Agent Tab to Current Group"
+      },
+      {
+        "command": "murmurplex.balance",
+        "title": "Murmurplex: Balance Terminal Grid"
+      },
+      {
+        "command": "murmurplex.coordinator",
+        "title": "Murmurplex: Change Coordinator"
+      },
+      {
+        "command": "murmurplex.brief",
+        "title": "Murmurplex: Copy Project Handover"
+      },
+      {
+        "command": "murmurplex.message",
+        "title": "Murmurplex: Send Agent Message"
+      },
+      {
+        "command": "murmurplex.attention",
+        "title": "Murmurplex: Set Agent Attention State"
+      },
+      {
+        "command": "murmurplex.openAgent",
+        "title": "Murmurplex: Focus Agent"
+      },
+      {
+        "command": "murmurplex.resumeAgent",
+        "title": "Murmurplex: Resume Saved Agent"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "murmurplex.agents",
+          "name": "Murmurplex"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Murmurplex",
+      "properties": {
+        "murmurplex.autoBalance": {
+          "type": "boolean",
+          "default": true,
+          "description": "Rebalance editor groups when terminal tabs or groups change while the project is active."
+        }
+      }
+    }
+  }
+}
