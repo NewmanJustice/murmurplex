@@ -48,6 +48,7 @@ test('configured Claude hooks run silently through the helper, authenticated ser
   fs.mkdirSync(path.join(extensionRoot, 'src'));
   fs.copyFileSync(path.resolve(__dirname, '../bin/murmurplex-agent'), helper);
   fs.copyFileSync(path.resolve(__dirname, '../src/claude.js'), path.join(extensionRoot, 'src', 'claude.js'));
+  fs.copyFileSync(path.resolve(__dirname, '../src/codex.js'), path.join(extensionRoot, 'src', 'codex.js'));
   fs.copyFileSync(path.resolve(__dirname, '../src/copilot.js'), path.join(extensionRoot, 'src', 'copilot.js'));
   const settings = claudeSettings(helper);
   const environment = { ...process.env, MURMURPLEX_PROJECT: root, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_URL: service.url, MURMURPLEX_TOKEN: service.token };

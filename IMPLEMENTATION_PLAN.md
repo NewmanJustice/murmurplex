@@ -13,7 +13,7 @@ be used today.
 | Area | Implemented | Not yet complete |
 | --- | --- | --- |
 | Terminal workspace | Native editor groups, agent tabs, automatic grid balancing, passing graphical validation. | Maximise/restore, isolation from source-editor groups. |
-| Lifecycle and attention | Claude and Copilot hook adapters, persistent requests, quiet Explorer/status-bar indicators, manual fallback. | Codex adapter, Copilot permission prompts, unsupported Claude prompts, tab/group indicators. |
+| Lifecycle and attention | Claude, Codex and Copilot hook adapters, persistent requests, quiet Explorer/status-bar indicators, manual fallback. | Copilot permission prompts, Codex questions, unsupported Claude prompts, tab/group indicators. |
 | Project record | Atomic writes, single writer, agents, coordinator identity, basic tasks, decisions, mailbox. | Schema migrations, crash recovery, richer records, reconciliation, bounded growth. |
 | Coordination | Saved coordinator selection, copyable handover. | Enforced authority, active handover, automatic delivery and wakeup. |
 | PR workflow | Handover text asks agents to verify state and get approval. | PR/review tracking, controlled merging, approval UI. |
@@ -305,7 +305,7 @@ provider, which the capability matrix (spike 2) will determine.
 | Tool/subagent events | Pre/Post/PostFailure, subagents | Pre/PostToolUse, SubagentStart/Stop (no failure event) | pre/postToolUse, postToolUseFailure, subagentStart/Stop |
 | Permission signal | PermissionRequest | PermissionRequest (only when approval needed) | permissionRequest, plus `notification` (permission, elicitation, idle) |
 | Question signal | AskUserQuestion tool | None documented (MCP elicitation untested) | `ask_user` tool via preToolUse; `notification` elicitation |
-| Launch-scoped injection | `--settings <json>` (verified) | `-c hooks...` works only with `--dangerously-bypass-hook-trust` (verified); otherwise hooks need persisted hash trust | `--plugin-dir <dir>` with `hooks/hooks.json` (verified: start/end payloads received) |
+| Launch-scoped injection | `--settings <json>` (verified) | `-c hooks.<Event>=...` with a fixed definition; needs one-time `/hooks` trust, which persists by hash (verified; bypass flag not used) | `--plugin-dir <dir>` with `hooks/hooks.json` (verified: start/end payloads received) |
 | Resume | `--resume` | `codex resume` | `--resume=<id>`, `--session-id` |
 | Wakeup | not yet researched | `codex queue` exists | not yet researched |
 
@@ -314,12 +314,20 @@ Consequences:
   Permission attention is manual: `permissionRequest` fires for auto-approved
   checks too, and the `notification` payload was not verifiable non-interactively.
   Revisit `notification` once it can be tested in an interactive session.
-- Codex: the trust gate is the issue. The bypass flag disables trust for every
-  hook source including repository hooks, so it is a security trade-off
-  (decision 6).
+- Codex: launch-scoped hooks need hash trust. A fixed `-c hooks.<Event>=...`
+  definition (no per-launch or per-install values) keeps its hash, so one trust
+  review via `/hooks` persists across launches and extension updates. Verified
+  with the real CLI: untrusted hooks do not run; after trust, SessionStart,
+  UserPromptSubmit and SessionEnd reached the service. The bypass flag is never
+  used (decision 6). Trust state is read through `codex app-server`
+  (`hooks/list`, `trustStatus`), which drives the one-time warning.
 - Codex has no documented question or tool-failure event; those stay manual.
+  Codex hook helper failures exit 0, because exit code 2 would block a tool or
+  continue a turn.
 
 ## Next step
 
-Build the Codex adapter (stable hook plus `/hooks` trust guidance), then CI. The
-Copilot adapter and layout diagnosis are complete.
+Set up CI (Node 20/22 tests, syntax checks, graphical test under a virtual
+display), then schema versioning and migrations, per-agent credentials and the
+VS Code UI-options investigation. The Claude, Copilot and Codex adapters are
+complete.

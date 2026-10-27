@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { claudeEvent } = require('../src/claude');
+const { codexEvent } = require('../src/codex');
 const { copilotEvent } = require('../src/copilot');
 
 async function main() {
@@ -19,8 +20,9 @@ async function main() {
   let endpoint, body;
   switch (command) {
     case 'claude-hook':
+    case 'codex-hook':
     case 'copilot-hook': {
-      const provider = command === 'claude-hook' ? 'Claude' : 'Copilot';
+      const provider = { 'claude-hook': 'Claude', 'codex-hook': 'Codex', 'copilot-hook': 'Copilot' }[command];
       let payload = '';
       for await (const chunk of process.stdin) {
         payload += chunk;
@@ -28,7 +30,7 @@ async function main() {
       }
       if (!agentId) throw new Error(`${provider} hook requires MURMURPLEX_AGENT_ID.`);
       endpoint = `/hooks/${provider.toLowerCase()}`;
-      body = { agentId, event: (command === 'claude-hook' ? claudeEvent : copilotEvent)(JSON.parse(payload)) };
+      body = { agentId, event: { 'claude-hook': claudeEvent, 'codex-hook': codexEvent, 'copilot-hook': copilotEvent }[command](JSON.parse(payload)) };
       break;
     }
     case 'state': endpoint = '/state'; break;
@@ -49,8 +51,10 @@ async function main() {
   if (!command.endsWith('-hook')) console.log(JSON.stringify(value, null, 2));
 }
 main().catch(error => {
-  // Copilot denies tools when a PreToolUse command hook exits nonzero.
-  const reportingOnly = process.argv[2] === 'copilot-hook';
-  console.error(`Murmurplex: ${reportingOnly ? 'Copilot status reporting failed: ' : ''}${error.message}`);
+  // Copilot denies tools when a PreToolUse command hook exits nonzero, and Codex
+  // treats exit code 2 as a block or continuation. Status reporting must never do either.
+  const provider = { 'copilot-hook': 'Copilot', 'codex-hook': 'Codex' }[process.argv[2]];
+  const reportingOnly = Boolean(provider);
+  console.error(`Murmurplex: ${reportingOnly ? `${provider} status reporting failed: ` : ''}${error.message}`);
   process.exitCode = reportingOnly ? 0 : 1;
 });

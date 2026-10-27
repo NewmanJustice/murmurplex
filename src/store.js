@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { claudeEvent, applyClaudeEvent } = require('./claude');
+const { codexEvent, applyCodexEvent } = require('./codex');
 const { copilotEvent, applyCopilotEvent } = require('./copilot');
 const STATES = new Set(['working', 'idle', 'needs-input', 'needs-permission', 'finished', 'disconnected', 'unknown']);
 const TASK_STATES = new Set(['backlog', 'in-progress', 'blocked', 'review', 'done']);
@@ -76,7 +77,7 @@ class Store {
     return this.update(next => {
       const agent = next.agents.find(a => a.id === id);
       agent.status = status;
-      if (!['unknown', 'disconnected'].includes(status)) for (const key of ['claude', 'copilot']) if (agent[key]) agent[key].requests = [];
+      if (!['unknown', 'disconnected'].includes(status)) for (const key of ['claude', 'codex', 'copilot']) if (agent[key]) agent[key].requests = [];
       if (['needs-input', 'needs-permission'].includes(status)) agent.attention = status;
       else if (['working', 'idle', 'finished'].includes(status)) agent.attention = null;
       return agent;
@@ -97,6 +98,15 @@ class Store {
     return this.update(next => {
       const agent = next.agents.find(a => a.id === id);
       applyCopilotEvent(agent, event);
+      return agent;
+    });
+  }
+  codexHook(id, input) {
+    if (this.agent(id).kind !== 'codex') throw new Error('Codex hooks require a Codex agent.');
+    const event = codexEvent(input);
+    return this.update(next => {
+      const agent = next.agents.find(a => a.id === id);
+      applyCodexEvent(agent, event);
       return agent;
     });
   }

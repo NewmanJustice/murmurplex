@@ -29,7 +29,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check src/extension.js && node --check src/service.js && node --check src/store.js && node --check src/claude.js && node --check src/copilot.js && node --check bin/murmurplex-agent",
+    "check": "node --check src/extension.js && node --check src/service.js && node --check src/store.js && node --check src/claude.js && node --check src/codex.js && node --check src/codex-trust.js && node --check src/copilot.js && node --check bin/murmurplex-agent",
     "test:vscode": "node scripts/test-vscode.js"
   },
   "contributes": {

@@ -4,6 +4,8 @@ const path = require('node:path');
 const { startService } = require('./service');
 const { gridLayout } = require('./layout');
 const { claudeSettings } = require('./claude');
+const { codexConfigArgs } = require('./codex');
+const { codexHookTrust } = require('./codex-trust');
 let active;
 
 function activate(context) {
@@ -79,6 +81,16 @@ function activate(context) {
     const picked = await vscode.window.showQuickPick(state().agents.map(agent => ({ label: agent.name, description: `${agent.id === state().coordinatorId ? 'Coordinator · ' : ''}${agent.kind} · ${agent.status}`, agent })), { placeHolder });
     return picked?.agent;
   }
+  let codexTrustWarned = false;
+  function checkCodexTrust() {
+    if (codexTrustWarned) return;
+    codexHookTrust(root).then(trust => {
+      if (trust === 'needs-review') {
+        codexTrustWarned = true;
+        vscode.window.showWarningMessage('Codex will not report status to Murmurplex until you trust its hooks once. In the Codex terminal, run /hooks, review the Murmurplex hooks and trust them. Until then, set Codex status manually.');
+      } else if (trust === 'unavailable') output.appendLine('Could not verify Codex hook trust; Codex status may need to be set manually.');
+    }).catch(error => output.appendLine(error.message));
+  }
   async function addAgent(newGroup, options = {}) {
     if (!await ensure()) return;
     const existing = options.agentId ? service.store.agent(options.agentId) : undefined;
@@ -104,6 +116,7 @@ function activate(context) {
         ...(kind !== 'shell' ? {
           shellPath: kind,
           shellArgs: kind === 'claude' ? ['--settings', JSON.stringify(claudeSettings(path.join(context.extensionPath, 'bin', 'murmurplex-agent')))]
+            : kind === 'codex' ? codexConfigArgs()
             : kind === 'copilot' ? ['--plugin-dir', path.join(context.extensionPath, 'copilot-plugin')] : []
         } : {}),
         iconPath: new vscode.ThemeIcon(coordinator ? 'star-full' : 'terminal'),
@@ -114,6 +127,7 @@ function activate(context) {
       terminals.set(agent.id, terminal); terminal.show();
     } catch (error) { service.store.status(agent.id, 'disconnected'); throw error; }
     refresh(); scheduleBalance();
+    if (kind === 'codex') checkCodexTrust();
     return agent;
   }
   const register = (name, callback) => context.subscriptions.push(vscode.commands.registerCommand(`murmurplex.${name}`, async (...args) => {

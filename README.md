@@ -65,7 +65,7 @@ Reading an inbox does **not** acknowledge its messages. Acknowledgements persist
 
 ### Automatic Claude Code attention
 
-New Claude terminals launched by Murmurplex receive session-scoped [Claude Code hooks](https://code.claude.com/docs/en/hooks). They are supplied through `--settings`, alongside existing user/project settings; Murmurplex does not edit your Claude configuration or change permission decisions. Existing terminals need to be relaunched to receive the hooks. Codex and shell sessions still use manual/helper status reporting.
+New Claude terminals launched by Murmurplex receive session-scoped [Claude Code hooks](https://code.claude.com/docs/en/hooks). They are supplied through `--settings`, alongside existing user/project settings; Murmurplex does not edit your Claude configuration or change permission decisions. Existing terminals need to be relaunched to receive the hooks. Shell sessions still use manual/helper status reporting.
 
 | Claude event | Murmurplex behaviour |
 | --- | --- |
@@ -101,6 +101,22 @@ Question tracking survives restarts and resuming the same conversation. A replac
 
 Copilot hook reporting errors are written to stderr without a permission decision, and the helper exits successfully so a telemetry failure cannot deny a tool call. Ordinary mailbox/status commands still exit nonzero on errors. If hooks are disabled or reporting fails, use manual reporting.
 
+### Automatic Codex CLI attention
+
+New Codex terminals launched by Murmurplex pass a fixed set of [Codex hooks](https://learn.chatgpt.com/docs/hooks) with `-c hooks.<Event>=...`; your Codex configuration is not edited and `--dangerously-bypass-hook-trust` is never used. Codex only runs hooks you have trusted, so the **first time** Murmurplex detects untrusted hooks it shows a warning: in the Codex terminal run `/hooks`, review the Murmurplex hooks and trust them. Trust is recorded by hash in your Codex config and persists, because the definitions contain no per-launch or per-install values. Until then, set Codex status manually.
+
+| Codex event | Murmurplex behaviour |
+| --- | --- |
+| Session start | Records the conversation ID and reports unknown; preserves unresolved attention. |
+| Prompt submission or tool activity | Reports working without dismissing outstanding requests. |
+| Permission request | Shows needs permission until all potentially matching tool calls return. Codex fires this only when approval is actually needed. |
+| Interrupt | Reports idle and clears permission requests, because the turn was cancelled. |
+| Main response stops | Reports finished unless attention remains. |
+| Subagent stops | Clears that subagent's outstanding requests. |
+| Session end | Reports disconnected, preserving unresolved attention. |
+
+Codex has no question or tool-failure event, so questions and denied permissions must be cleared with **Set Agent Attention State** or `murmurplex-agent status working`. Codex hook reporting errors go to stderr and the helper exits successfully, because exit code 2 would block a tool or continue a turn. Payloads are reduced to event, conversation, subagent and tool identifiers.
+
 ### Persistence and devcontainers
 
 The workspace extension and service run in the project environment, including inside a devcontainer. One project service is active per development-host window in this prototype.
@@ -120,7 +136,7 @@ The service runs for the extension session. It stops when the extension deactiva
 - Native editor groups provide the layout. While Murmurplex is active, auto-balance affects the **whole current editor grid**, including groups containing source files. It does not close or replace their tabs. Use a dedicated window or set `murmurplex.autoBalance` to `false` if you want to arrange source editors independently.
 - The grid supports up to nine groups; additional agents can be tabs. VS Code's minimum pane sizes still apply. Odd group counts use different row heights to keep pane areas equal. Automatic removal of an empty group relies on VS Code's `workbench.editor.closeEmptyGroups` setting, enabled by default.
 - Coordinator styling in the Explorer agent list is live and authoritative. Native terminal star/title/icon styling reflects the role at terminal creation; switching the coordinator does not yet restyle existing native tabs or transfer a model's private conversation history.
-- Claude and Copilot terminals launched by Murmurplex have automatic lifecycle reporting for the events described above (Copilot permission prompts are manual). Other providers and unsupported prompts require the helper or manual status command. Native terminal tabs/groups do not yet have dynamic attention styling; the Explorer list and aggregate status-bar indicator remain authoritative.
+- Claude, Codex and Copilot terminals launched by Murmurplex have automatic lifecycle reporting for the events described above (Codex needs one-time hook trust; Copilot permission prompts and Codex questions are manual). Shell sessions and unsupported prompts require the helper or manual status command. Native terminal tabs/groups do not yet have dynamic attention styling; the Explorer list and aggregate status-bar indicator remain authoritative.
 - Task assignment and coordinator selection are persistent records. Automated delegation, active coordinator handover, idle-agent wakeup, PR discovery, repository reconciliation, and merge controls are not implemented yet. The handover instructs agents to check repository state and request approval; this prototype does not enforce external Git actions.
 - Backlog and decisions are accessible through the helper and handover; a dedicated backlog UI and richer PR/worktree records are next steps.
 
@@ -132,7 +148,7 @@ npm run check
 npm run test:vscode
 ```
 
-The first command tests persistence, recovery, single-writer protection, corrupt-state handling, message acknowledgement, authentication, request limits, grid geometry, Claude and Copilot hook reporting through the helper/service, and extension indicators. The second checks extension and service syntax.
+The first command tests persistence, recovery, single-writer protection, corrupt-state handling, message acknowledgement, authentication, request limits, grid geometry, Claude, Codex and Copilot hook reporting through the helper/service, and extension indicators. The second checks extension and service syntax.
 
 The VS Code integration test needs a graphical desktop and `code` on PATH (override with `VSCODE_CLI`). It launches an isolated temporary profile and project, checks real terminal tabs and groups, balanced pane sizes, persisted attention, and removal of a group while keeping its neighbour. It leaves its temporary logs for diagnosis and does not use your normal VS Code profile.
 
@@ -142,6 +158,7 @@ The VS Code integration test needs a graphical desktop and `code` on PATH (overr
 - `src/layout.js`: equal-area grid geometry.
 - `src/claude.js`: launch-scoped Claude hook configuration and lifecycle/attention adapter.
 - `src/copilot.js` and `copilot-plugin/`: Copilot lifecycle/attention adapter and the bundled hook plugin.
+- `src/codex.js` and `src/codex-trust.js`: Codex launch-time hook definitions, lifecycle/attention adapter, and hook trust detection through `codex app-server`.
 - `src/service.js`: authenticated loopback API, bound to the workspace extension lifecycle.
 - `src/store.js`: atomic persistent project state, roles, tasks, decisions and mailbox.
 - `bin/murmurplex-agent`: agent-facing mailbox and state helper.
