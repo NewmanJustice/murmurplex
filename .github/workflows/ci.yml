@@ -12,6 +12,7 @@ jobs:
   unit:
     name: Unit tests (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +44,18 @@ jobs:
           rm vscode.tar.gz
       - name: Run graphical test
         env:
+          TMPDIR: ${{ runner.temp }}
           VSCODE_CLI: ${{ runner.temp }}/vscode/bin/code
           VSCODE_ARGS: --no-sandbox --disable-gpu
         run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" npm run test:vscode
+      - name: Upload graphical failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-failure-diagnostics
+          path: |
+            ${{ runner.temp }}/murmurplex-vscode-*/profile/logs/**
+            ${{ runner.temp }}/murmurplex-vscode-*/project/integration-result.json
+            ${{ runner.temp }}/murmurplex-vscode-*/project/layout-result.json
+          if-no-files-found: warn
+          retention-days: 7
