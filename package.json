@@ -29,8 +29,14 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check src/extension.js && node --check src/service.js && node --check src/store.js && node --check src/migrations.js && node --check src/claude.js && node --check src/codex.js && node --check src/codex-trust.js && node --check src/copilot.js && node --check bin/murmurplex-agent",
-    "test:vscode": "node scripts/test-vscode.js"
+    "check": "node --check src/extension.js && node --check src/service.js && node --check src/store.js && node --check src/security.js && node --check src/migrations.js && node --check src/claude.js && node --check src/codex.js && node --check src/codex-trust.js && node --check src/copilot.js && node --check bin/murmurplex-agent && node --check scripts/scan-secrets.js && node --check scripts/install-security-hook.js && node --check scripts/enable-github-protection.js",
+    "test:vscode": "node scripts/test-vscode.js",
+    "security:scan": "node scripts/scan-secrets.js history",
+    "security:staged": "node scripts/scan-secrets.js staged",
+    "security:files": "node scripts/scan-secrets.js files",
+    "security:install-hook": "node scripts/install-security-hook.js",
+    "security:github": "node scripts/enable-github-protection.js",
+    "test:security-scanner": "node --test test/scanner.integration.js"
   },
   "contributes": {
     "commands": [
@@ -90,6 +96,12 @@
           "type": "boolean",
           "default": true,
           "description": "Rebalance editor groups when terminal tabs or groups change while the project is active."
+        },
+        "murmurplex.inheritAuthenticationEnvironment": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "description": "Allow inherited API-key/token/password environment variables in new Murmurplex terminals. Disabled by default: use each provider's supported saved login/keychain instead. Shell startup files and same-user file access are not isolated."
         }
       }
     }

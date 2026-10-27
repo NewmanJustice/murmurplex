@@ -38,7 +38,8 @@ function runHook(handler, environment, input) {
 
 test('configured Claude hooks run silently through the helper, authenticated service and restart', async t => {
   const root = project();
-  let service = await startService(path.join(root, '.murmurplex'));
+  const credentialsDirectory = path.join(root, 'private', 'credentials');
+  let service = await startService(path.join(root, '.murmurplex'), credentialsDirectory);
   t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Claude', kind: 'claude' });
   service.issueCredential(agent.id);
@@ -51,6 +52,7 @@ test('configured Claude hooks run silently through the helper, authenticated ser
   fs.copyFileSync(path.resolve(__dirname, '../src/claude.js'), path.join(extensionRoot, 'src', 'claude.js'));
   fs.copyFileSync(path.resolve(__dirname, '../src/codex.js'), path.join(extensionRoot, 'src', 'codex.js'));
   fs.copyFileSync(path.resolve(__dirname, '../src/copilot.js'), path.join(extensionRoot, 'src', 'copilot.js'));
+  fs.copyFileSync(path.resolve(__dirname, '../src/security.js'), path.join(extensionRoot, 'src', 'security.js'));
   const settings = claudeSettings(helper);
   const environment = { ...process.env, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_CREDENTIALS: service.credentialFile(agent.id) };
   const hook = async (name, fields = {}) => {
@@ -67,7 +69,7 @@ test('configured Claude hooks run silently through the helper, authenticated ser
   const persisted = fs.readFileSync(path.join(root, '.murmurplex/state.json'), 'utf8');
   assert.doesNotMatch(persisted, /Private question text|private\/transcript/);
   await service.close();
-  service = await startService(path.join(root, '.murmurplex'));
+  service = await startService(path.join(root, '.murmurplex'), credentialsDirectory);
   service.issueCredential(agent.id);
   assert.equal(service.store.agent(agent.id).status, 'disconnected');
   assert.equal(service.store.agent(agent.id).attention, 'needs-input');
@@ -150,11 +152,15 @@ test('manual attention overrides automatic requests and invalid events never com
 
 test('extension launches scoped hooks and keeps hidden-agent attention visible when focused', async t => {
   const root = project();
+  const storage = project();
   const commands = new Map();
   const errors = [];
   const disposable = { dispose() {} };
   const status = { show() {}, dispose() {} };
   let provider;
+  let selectedAgent;
+  let handover;
+  let inheritAuthentication = false;
   const group = { viewColumn: 1, tabs: [] };
   class UIValue { constructor(value) { this.value = value; } }
   const vscode = {
@@ -165,11 +171,15 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
     },
     ThemeColor: UIValue, ThemeIcon: UIValue, TreeItem: UIValue,
     StatusBarAlignment: { Left: 1 },
+    env: { clipboard: { async writeText(value) { handover = value; } } },
     workspace: {
       isTrusted: true, workspaceFolders: [{ uri: { scheme: 'file', fsPath: root } }],
-      getConfiguration: () => ({ get: () => false })
+      getConfiguration: () => ({ get: key => key === 'inheritAuthenticationEnvironment' ? inheritAuthentication : false })
     },
-    commands: { registerCommand(name, callback) { commands.set(name, callback); return disposable; } },
+    commands: {
+      registerCommand(name, callback) { commands.set(name, callback); return disposable; },
+      async executeCommand() {}
+    },
     window: {
       terminals: [],
       tabGroups: { all: [group], activeTabGroup: group, onDidChangeTabGroups: () => disposable, onDidChangeTabs: () => disposable },
@@ -178,8 +188,10 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
       registerTreeDataProvider(name, value) { provider = value; return disposable; },
       onDidCloseTerminal: () => disposable,
       showErrorMessage: message => errors.push(message),
+      showInformationMessage() {},
+      async showQuickPick(items) { return items.find(item => item.agent.id === selectedAgent); },
       createTerminal(options) {
-        const terminal = { name: options.name, options, show() { vscode.window.activeTerminal = terminal; } };
+        const terminal = { name: options.name, options, creationOptions: options, show() { vscode.window.activeTerminal = terminal; } };
         this.terminals.push(terminal);
         return terminal;
       }
@@ -192,15 +204,22 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
     Module._load = function (name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
     extension = require('../src/extension');
   } finally { Module._load = load; }
-  extension.activate({ subscriptions: [], extensionPath: path.resolve(__dirname, '..') });
-  t.after(async () => { await extension.deactivate(); fs.rmSync(root, { recursive: true, force: true }); });
+  const context = { subscriptions: [], extensionPath: path.resolve(__dirname, '..'), globalStorageUri: { fsPath: storage } };
+  extension.activate(context);
+  t.after(async () => {
+    await extension.deactivate();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(storage, { recursive: true, force: true });
+  });
   const agent = await commands.get('murmurplex.addTab')({ kind: 'claude', name: 'Claude' });
   assert.ok(agent?.id, errors.join('\n'));
   const terminal = vscode.window.terminals[0];
   assert.equal(terminal.options.shellPath, 'claude');
   assert.equal(terminal.options.shellArgs[0], '--settings');
+  assert.equal(terminal.options.env.OPENAI_API_KEY, null, 'native login is the default');
+  assert.equal(terminal.options.env.GH_TOKEN, null);
   const settings = JSON.parse(terminal.options.shellArgs[1]);
-  await commands.get('murmurplex.addTab')({ kind: 'shell', name: 'Other agent' });
+  const other = await commands.get('murmurplex.addTab')({ kind: 'shell', name: 'Other agent' });
   assert.notEqual(vscode.window.activeTerminal, terminal);
   const hook = async (name, fields = {}) => {
     const result = await runHook(settings.hooks[name][0].hooks[0], { ...process.env, ...terminal.options.env }, event(name, fields));
@@ -220,5 +239,28 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   assert.doesNotMatch(status.text, /waiting/);
   assert.equal(provider.getChildren().find(item => item.id === agent.id).attention, null);
   assert.equal(fs.existsSync(path.join(root, '.claude')), false, 'launch settings never overwrite project Claude configuration');
+  const credentialFile = terminal.options.env.MURMURPLEX_CREDENTIALS;
+  assert.ok(credentialFile.startsWith(storage + path.sep));
+  await extension.deactivate();
+  assert.equal(fs.existsSync(credentialFile), false);
+  extension.activate(context);
+  await commands.get('murmurplex.start')();
+  assert.ok(fs.existsSync(credentialFile), 'restored terminals keep the same external credential-file path');
+  await hook('UserPromptSubmit');
+  assert.equal(provider.getChildren().find(item => item.id === agent.id).status, 'working');
+  const credential = JSON.parse(fs.readFileSync(credentialFile, 'utf8'));
+  const post = (body) => fetch(credential.url + '/messages', {
+    method: 'POST', headers: { Authorization: `Bearer ${credential.token}` }, body: JSON.stringify(body)
+  });
+  assert.equal((await post({ to: agent.id, body: 'Coordinator-only exchange' })).status, 200);
+  assert.equal((await post({ to: other.id, body: 'Worker-visible exchange' })).status, 200);
+  selectedAgent = other.id;
+  await commands.get('murmurplex.brief')();
+  assert.match(handover, /Worker-visible exchange/);
+  assert.doesNotMatch(handover, /Coordinator-only exchange/);
+  assert.ok(!handover.includes(credential.token));
+  inheritAuthentication = true;
+  await commands.get('murmurplex.addTab')({ kind: 'shell', name: 'Compatibility login' });
+  assert.equal(vscode.window.terminals.at(-1).options.env.OPENAI_API_KEY, undefined, 'compatibility mode does not delete provider credentials');
   assert.deepEqual(errors, []);
 });

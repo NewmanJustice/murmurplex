@@ -92,7 +92,7 @@ test('Copilot preserves request correlation through service restart, resume and 
 
 test('the shipped Copilot plugin hooks reach the service through the helper on PATH', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'murmurplex-copilot-'));
-  const service = await startService(path.join(root, '.murmurplex'));
+  const service = await startService(path.join(root, '.murmurplex'), path.join(root, 'private', 'credentials'));
   t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Copilot', kind: 'copilot' });
   service.issueCredential(agent.id);

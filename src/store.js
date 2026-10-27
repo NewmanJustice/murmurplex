@@ -6,6 +6,7 @@ const { claudeEvent, applyClaudeEvent } = require('./claude');
 const { codexEvent, applyCodexEvent } = require('./codex');
 const { copilotEvent, applyCopilotEvent } = require('./copilot');
 const { CURRENT_VERSION, migrate } = require('./migrations');
+const { assertNoSecrets, parseJSON } = require('./security');
 const STATES = new Set(['working', 'idle', 'needs-input', 'needs-permission', 'finished', 'disconnected', 'unknown']);
 const TASK_STATES = new Set(['backlog', 'in-progress', 'blocked', 'review', 'done']);
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -15,8 +16,9 @@ function text(value, name, max = 16000) {
 }
 
 class Store {
-  constructor(directory) {
+  constructor(directory, checkSecrets = assertNoSecrets) {
     this.directory = directory;
+    this.checkSecrets = checkSecrets;
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.lock = path.join(directory, 'writer.lock');
     try { this.lockFd = fs.openSync(this.lock, 'wx', 0o600); }
@@ -32,7 +34,9 @@ class Store {
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (raw === undefined) this.state = { version: CURRENT_VERSION, revision: 0, coordinatorId: null, agents: [], tasks: [], messages: [], decisions: [] };
       else {
-        const { state, from } = migrate(JSON.parse(raw), STATES);
+        const parsed = parseJSON(raw, 'Project state');
+        this.checkSecrets(parsed);
+        const { state, from } = migrate(parsed, STATES);
         // Keep the pre-migration file once per source version; never overwrite an earlier backup.
         if (from !== CURRENT_VERSION) {
           try { fs.writeFileSync(`${this.filename}.v${from}.bak`, raw, { flag: 'wx', mode: 0o600 }); }
@@ -45,9 +49,16 @@ class Store {
     } catch (error) { this.close(); throw error; }
   }
   snapshot() { return copy(this.state); }
+  snapshotFor(agentId) {
+    this.agent(agentId);
+    const snapshot = this.snapshot();
+    if (snapshot.coordinatorId !== agentId) snapshot.messages = snapshot.messages.filter(message => message.from === agentId || message.to === agentId);
+    return snapshot;
+  }
   update(fn) {
     const next = copy(this.state);
     const result = fn(next);
+    this.checkSecrets(next);
     next.revision++;
     const temporary = `${this.filename}.${randomUUID()}.tmp`;
     let fd;

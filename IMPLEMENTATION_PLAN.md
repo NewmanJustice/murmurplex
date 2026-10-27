@@ -86,8 +86,17 @@ These are small and time-boxed. They change later designs, so decide them first.
 4. **State schema versioning and migrations.** The Claude adapter already added
    `agent.claude` while `version` is still 1. Introduce a versioned schema,
    validation and tested migrations before any further record changes.
-5. **Per-agent credentials (done).** Delivered as in-memory tokens in 0600
-   credential files; process-ancestry identity over a Unix socket is a possible
+5. **Per-agent credentials (done).** Token hashes are held in memory; plaintext
+   tokens are delivered in 0600 files in private VS Code extension storage outside
+   the checkout, with 0700 credential directories. This is local authentication,
+   not a provider-key vault or same-user isolation. User-only membership/role
+   changes, coordinator-only task assignment/decisions, worker-owned task updates
+   and recipient-filtered state/handovers are enforced. Native provider login is
+   the default, with explicit opt-in to authentication-environment inheritance.
+   Recognisable secrets are rejected from records and redacted in diagnostics.
+   Pre-commit and CI Gitleaks scans protect this repository; enabling GitHub push
+   protection still requires authenticated repository-admin access.
+   Process-ancestry identity over a Unix socket is a possible
    later hardening. Original problem: the shared token gives every local agent full
    access and allows status spoofing. Introduce per-agent credentials (separate
    from durable state) so the service can attribute requests, enforce roles,
@@ -330,7 +339,7 @@ Consequences:
 ## Next step
 
 The VS Code UI-options investigation. Per-agent credentials are done (decision
-5): identity is enforced per agent; coordinator authority is not yet enforced.
+5): identity and coordinator/worker permissions are enforced per agent.
 State schema versioning is done: version 2, tested migration from version 1,
 validation, one-time backups and refusal of newer state (decision 4). Crash
 recovery and bounded growth remain open. The Claude, Copilot and Codex adapters

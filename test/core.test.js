@@ -72,9 +72,37 @@ test('corrupt state fails visibly without overwriting it or leaking the lock', t
 
 const tokenOf = (service, id) => JSON.parse(fs.readFileSync(service.credentialFile(id), 'utf8')).token;
 
+test('credentials stay outside Git even without ignore rules and legacy checkout credentials are removed', async t => {
+  const directory = temporary(t);
+  const project = path.join(directory, 'project');
+  const stateDirectory = path.join(project, '.murmurplex');
+  const credentialsDirectory = path.join(directory, 'private', 'credentials');
+  fs.mkdirSync(path.join(stateDirectory, 'credentials'), { recursive: true });
+  fs.writeFileSync(path.join(stateDirectory, 'credentials', 'legacy.json'), '{"token":"old"}');
+  fs.writeFileSync(path.join(stateDirectory, 'runtime.json'), '{"token":"old"}');
+  const initialized = spawnSync('git', ['init', '--quiet', project], { encoding: 'utf8' });
+  assert.equal(initialized.status, 0, initialized.stderr);
+  const service = await startService(stateDirectory, credentialsDirectory);
+  t.after(async () => { await service.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const agent = service.store.register({ name: 'Worker', kind: 'shell' });
+  service.issueCredential(agent.id);
+  assert.equal(fs.existsSync(path.join(stateDirectory, 'credentials')), false);
+  assert.equal(fs.existsSync(path.join(stateDirectory, 'runtime.json')), false);
+  assert.equal(fs.existsSync(path.join(project, '.gitignore')), false);
+  assert.equal(fs.statSync(credentialsDirectory).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(service.credentialFile(agent.id)).mode & 0o777, 0o600);
+  assert.ok(fs.existsSync(service.credentialFile(agent.id)));
+  assert.ok(!fs.readFileSync(path.join(stateDirectory, 'state.json'), 'utf8').includes(tokenOf(service, agent.id)));
+  const staged = spawnSync('git', ['-c', 'core.excludesFile=/dev/null', 'add', '--dry-run', '.'], { cwd: project, encoding: 'utf8' });
+  assert.equal(staged.status, 0, staged.stderr);
+  assert.match(staged.stdout, /state\.json/);
+  assert.doesNotMatch(staged.stdout, /credentials|runtime\.json/);
+});
+
 test('service authentication, mailbox, invalid requests and restart recovery', async t => {
   const directory = temporary(t);
-  let service = await startService(directory);
+  const credentialsDirectory = `${directory}-credentials`;
+  let service = await startService(directory, credentialsDirectory);
   t.after(async () => { if (service) await service.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const lead = service.store.register({ name: 'Coordinator', kind: 'copilot' });
   const worker = service.store.register({ name: 'Worker', kind: 'codex' });
@@ -120,9 +148,9 @@ test('service authentication, mailbox, invalid requests and restart recovery', a
   assert.equal((await request('/state', null, stale)).status, 401, 'revocation takes effect immediately');
   service.issueCredential(worker.id);
   await service.close(); service = undefined;
-  assert.equal(fs.existsSync(path.join(directory, 'credentials')), false);
-  service = await startService(directory);
-  assert.equal(fs.readdirSync(path.join(directory, 'credentials')).length, 0, 'credentials never survive a restart');
+  assert.equal(fs.existsSync(credentialsDirectory), false);
+  service = await startService(directory, credentialsDirectory);
+  assert.equal(fs.readdirSync(credentialsDirectory).length, 0, 'credentials never survive a restart');
   assert.equal((await request('/state', null, stale)).status, 401);
   service.issueCredential(lead.id); service.issueCredential(worker.id);
   const inbox = await (await asWorker(`/inbox`)).json();
@@ -140,14 +168,15 @@ test('agent helper reads refreshed credentials after a service restart and never
   const { promisify } = require('node:util');
   const execFile = promisify(require('node:child_process').execFile);
   const directory = temporary(t);
-  let service = await startService(path.join(directory, '.murmurplex'));
+  const credentialsDirectory = path.join(directory, 'private', 'credentials');
+  let service = await startService(path.join(directory, '.murmurplex'), credentialsDirectory);
   t.after(async () => { if (service) await service.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Restored worker', kind: 'shell' });
   service.issueCredential(agent.id);
   const environment = { ...process.env, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_CREDENTIALS: service.credentialFile(agent.id) };
   assert.equal(Object.keys(environment).some(key => /TOKEN/.test(key) && key.startsWith('MURMURPLEX')), false);
   await service.close(); service = undefined;
-  service = await startService(path.join(directory, '.murmurplex'));
+  service = await startService(path.join(directory, '.murmurplex'), credentialsDirectory);
   service.issueCredential(agent.id);
   const helper = path.join(__dirname, '../bin/murmurplex-agent');
   const sent = await execFile(process.execPath, [helper, 'send', agent.id, 'Message after restart'], { env: environment });

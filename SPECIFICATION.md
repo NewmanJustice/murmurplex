@@ -115,7 +115,11 @@ Responsibilities:
 - Provide updates to the extension's visual indicators.
 - Recover project state and pending messages after restarting.
 
-Use an authenticated local connection. Runtime credentials are separate from durable project state and are not committed to Git. Keep project data on a persistent mount or volume. The design must account for the fact that container localhost and host localhost are different network contexts.
+Use an authenticated local connection. Runtime credentials are separate from durable project state and stored outside the project checkout in private VS Code extension storage, not committed to Git. Per-agent tokens authenticate Murmurplex requests; they are not a vault for provider API keys or an isolation boundary against processes running as the same OS user. Keep project data on a persistent mount or volume. The design must account for the fact that container localhost and host localhost are different network contexts.
+
+Only the user adds agents and replaces the coordinator. The current coordinator creates/assigns tasks and records decisions. Workers can update their own assigned tasks without reassigning them. All agents can read shared agent/task/decision records; workers can read only messages they sent or received, while the user and current coordinator can inspect all exchanges. Apply the same visibility rules to handovers. These are service permissions, not filesystem or terminal-command isolation.
+
+Leave provider authentication with supported provider login mechanisms; do not introduce a custom key vault. New terminals remove common authentication-secret environment variables by default, with an explicit machine-level compatibility opt-in to inheritance. Shell startup files, unknown variables and same-user access remain outside this protection. Reject recognisable secrets before writing project records and redact them from diagnostics, without claiming detection of every possible secret.
 
 The prototype service runs within the workspace extension's process and stops when the extension deactivates. Durable state remains on disk. Running independently while VS Code is closed is a possible future extension, not a current requirement.
 

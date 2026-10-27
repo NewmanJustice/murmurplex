@@ -106,7 +106,7 @@ test('Codex hook definitions are stable and contain no per-launch values', () =>
 
 test('Codex helper reports through the service, ignores prompt text and never blocks Codex', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'murmurplex-codex-'));
-  const service = await startService(path.join(root, '.murmurplex'));
+  const service = await startService(path.join(root, '.murmurplex'), path.join(root, 'private', 'credentials'));
   t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Codex', kind: 'codex' });
   service.issueCredential(agent.id);

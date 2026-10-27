@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 const fs = require('node:fs');
+const { redact, parseJSON } = require('../src/security');
 const { claudeEvent } = require('../src/claude');
 const { codexEvent } = require('../src/codex');
 const { copilotEvent } = require('../src/copilot');
@@ -8,7 +9,7 @@ const { copilotEvent } = require('../src/copilot');
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!command || command === 'help') {
-    console.log(`Murmurplex project mailbox\n\nstate\ninbox\nsend <recipient-id> <message...>\nack <message-id>\nstatus <working|idle|needs-input|needs-permission|finished>\ntask <title> [status] [owner-id] [existing-task-id]\ndecision <text...>\n\nRun inside a Murmurplex terminal; messages are durable and require explicit acknowledgement.\nReading an inbox does not wake another agent or submit a prompt to its terminal.`);
+    console.log(`Murmurplex project mailbox\n\nstate\ninbox\nsend <recipient-id> <message...>\nack <message-id>\nstatus <working|idle|needs-input|needs-permission|finished>\ntask <title> [status] [owner-id] [existing-task-id]\ndecision <text...>\n\nRun inside a Murmurplex terminal; messages are durable and require explicit acknowledgement.\nOnly the coordinator creates/assigns tasks and records decisions. Workers update their own assigned tasks using the existing task ID and cannot reassign them.\nWorker state includes only messages they sent or received. Keep secrets out of messages, tasks and decisions.\nReading an inbox does not wake another agent or submit a prompt to its terminal.`);
     return;
   }
   const agentId = process.env.MURMURPLEX_AGENT_ID;
@@ -25,7 +26,7 @@ async function main() {
       }
       if (!agentId) throw new Error(`${provider} hook requires MURMURPLEX_AGENT_ID.`);
       endpoint = `/hooks/${provider.toLowerCase()}`;
-      body = { agentId, event: { 'claude-hook': claudeEvent, 'codex-hook': codexEvent, 'copilot-hook': copilotEvent }[command](JSON.parse(payload)) };
+      body = { agentId, event: { 'claude-hook': claudeEvent, 'codex-hook': codexEvent, 'copilot-hook': copilotEvent }[command](parseJSON(payload, `${provider} hook input`)) };
       break;
     }
     case 'state': endpoint = '/state'; break;
@@ -41,7 +42,7 @@ async function main() {
   const send = async () => {
     const credentials = process.env.MURMURPLEX_CREDENTIALS;
     if (!credentials) throw new Error('No Murmurplex credentials: run this inside a Murmurplex terminal.');
-    const runtime = JSON.parse(fs.readFileSync(credentials, 'utf8'));
+    const runtime = parseJSON(fs.readFileSync(credentials, 'utf8'), 'Credential file');
     return fetch(runtime.url + endpoint, {
       method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${runtime.token}`, 'Content-Type': 'application/json' },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(5000)
@@ -49,7 +50,7 @@ async function main() {
   };
   let response = await send();
   if (response.status === 401) response = await send();
-  const value = await response.json();
+  const value = parseJSON(await response.text(), 'Service response');
   if (!response.ok) throw new Error(value.error);
   if (!command.endsWith('-hook')) console.log(JSON.stringify(value, null, 2));
 }
@@ -58,6 +59,6 @@ main().catch(error => {
   // treats exit code 2 as a block or continuation. Status reporting must never do either.
   const provider = { 'copilot-hook': 'Copilot', 'codex-hook': 'Codex' }[process.argv[2]];
   const reportingOnly = Boolean(provider);
-  console.error(`Murmurplex: ${reportingOnly ? `${provider} status reporting failed: ` : ''}${error.message}`);
+  console.error(`Murmurplex: ${reportingOnly ? `${provider} status reporting failed: ` : ''}${redact(error.message)}`);
   process.exitCode = reportingOnly ? 0 : 1;
 });

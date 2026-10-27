@@ -16,7 +16,7 @@ Requirements: desktop VS Code 1.95 or later; Node.js 20 or later in the project 
 3. In that new window, open the project folder you want the agents to work on.
 4. Run **Murmurplex: Start or Resume Project** from the Command Palette. On a new project, choose the first agent and give it a name. The first agent is the coordinator. Choose `shell` to explore without starting an AI agent.
 5. Run **Murmurplex: Add Agent Terminal Group** to add a visible pane, or **Murmurplex: Add Agent Tab to Current Group** to add a tab in the focused group.
-6. Run **Murmurplex: Copy Project Handover**, then paste the brief into each agent to introduce its project record and mailbox commands.
+6. Run **Murmurplex: Copy Project Handover**, choose its recipient, then paste that brief into that agent. Repeat for other agents; do not share the coordinator's full brief with workers.
 
 Look for **Murmurplex** in Explorer and the status bar. The coordinator is marked with a star in the agent list; amber dots identify unresolved questions or permission requests. Clicking an agent focuses its terminal without clearing its request.
 
@@ -36,7 +36,7 @@ code --new-window --extensionDevelopmentPath=/absolute/path/to/murmurplex /absol
 | Balance Terminal Grid | Gives editor panes equal area. |
 | Resume Saved Agent | Reuses a saved agent identity and mailbox in a new terminal. Paste the project handover to restore its context. |
 | Change Coordinator | Changes the single coordinator identity in the saved record. |
-| Copy Project Handover | Copies the shared state and mailbox instructions. |
+| Copy Project Handover | Selects a recipient and copies its permitted state and mailbox instructions. |
 | Send Agent Message | Queues a message for the selected agent. |
 | Set Agent Attention State | Exercises the attention indicator or explicitly resolves it. |
 
@@ -57,11 +57,30 @@ murmurplex-agent task 'Review login changes' review OWNER_ID
 murmurplex-agent decision 'User approval is required before merging.'
 ```
 
-`state` lists agent and task IDs. `task` accepts a title, optional status, optional owner ID, and optional existing task ID. Updating a task replaces its title, status and owner, so provide all three. Valid task states: `backlog`, `in-progress`, `blocked`, `review`, `done`.
+`state` lists agent and task IDs. `task` accepts a title, optional status, optional owner ID, and optional existing task ID. Only the coordinator can create or assign tasks and record decisions. Workers can update the title/status of their own assigned tasks using the existing task ID, but cannot change ownership. For coordinator updates, provide title, status and owner because omitted status/owner reset to their defaults. Valid task states: `backlog`, `in-progress`, `blocked`, `review`, `done`.
 
 Status values: `working`, `idle`, `needs-input`, `needs-permission`, `finished`, `disconnected`, `unknown`. `working`, `idle`, and `finished` resolve attention; disconnecting or focusing a terminal does not.
 
 Reading an inbox does **not** acknowledge its messages. Acknowledgements persist. Mailbox delivery is pull-based in this prototype: agents need to check their inboxes, and messages never inject keystrokes into a terminal or automatically wake an agent.
+
+### Authentication and permissions
+
+Murmurplex does not collect or store provider API keys. Authenticate each CLI using its supported saved-login/keychain mechanism in the same local or container environment before launching it. In devcontainers, arrange provider authentication separately; do not bake credentials into images or commit them.
+
+New terminals default to **native-login mode**: common API-key, token, password and private-key environment variables are explicitly removed rather than copied into terminal options. Normal environment settings, home directories, configuration paths and SSH-agent access are preserved. For API-key-only or other environment-based authentication, enable the machine-level **Murmurplex: Inherit Authentication Environment** setting (`murmurplex.inheritAuthenticationEnvironment`) and relaunch the terminal. This compatibility mode deliberately allows credentials to be inherited.
+
+Environment filtering is best-effort, not a sandbox: unknown variable names, shell startup scripts, CLI configuration files and same-user file access can still provide credentials. Saved provider logins are managed by the provider, not necessarily encrypted by Murmurplex or backed by an OS keychain.
+
+| Operation | User through VS Code | Coordinator API | Worker API |
+| --- | --- | --- | --- |
+| Add agents or replace coordinator | Yes | No | No |
+| Create/assign tasks; record decisions | Via coordinator; no task/decision UI yet | Yes | No |
+| Update assigned tasks | Via agents; no task UI yet | Any task | Own tasks only; no reassignment |
+| Read project record | Full record | Full record | Shared agents/tasks/decisions; only messages sent or received by that worker |
+| Report status/hooks; acknowledge mail | Manual status available | Own identity only | Own identity only |
+| Send messages | As user | As self | As self |
+
+Coordinator permissions follow the current persisted role on every request; a replaced coordinator immediately loses those permissions. Handovers are filtered for the selected recipient. These controls apply to Murmurplex's API, not direct terminal Git/file operations or other VS Code extensions.
 
 ### Automatic Claude Code attention
 
@@ -121,7 +140,13 @@ Codex has no question or tool-failure event, so questions and denied permissions
 
 The workspace extension and service run in the project environment, including inside a devcontainer. One project service is active per development-host window in this prototype.
 
-The service listens on a random loopback port and rejects browser-origin requests. Each agent gets its own random token, held only in memory by the service and delivered through an owner-only file (`.murmurplex/credentials/<agent>.json`) that the helper reads on every call; no secret appears in terminal environments, process listings or transcripts. The service attributes requests to the calling agent and rejects status, inbox, hook and message calls that claim another agent's identity. Tokens are revoked when a terminal closes and wiped on restart. Do not forward the port or commit `.murmurplex/`. Limitation: processes running as the same OS user can read other agents' credential files, so this stops accidental and prompt-level spoofing, not malicious local code. Coordinator-only controls are not yet enforced.
+The service listens on a random loopback port and rejects browser-origin requests. Each agent gets its own random Murmurplex token. The service keeps token hashes in memory and delivers the plaintext token through an owner-only file in VS Code's extension storage, outside the project checkout. The helper reads that file on every call; Murmurplex puts only its path, not its token, in the terminal environment and does not put its token in command arguments or normal helper output. Credential directories use mode 0700 and files use 0600 on POSIX; these modes do not establish equivalent access restrictions on Windows. Tokens are revoked when a terminal closes and replaced on restart. Do not forward the port.
+
+This is local service authentication, not an encrypted vault or sandbox. The API enforces the permissions described above, but processes running as the same OS user can read other agents' credential files and the project-state file directly. It does not isolate malicious local code or prevent agents from writing secrets into source files.
+
+Writes containing recognisable provider tokens, private keys, bearer credentials, obvious secret assignments or active Murmurplex tokens are rejected before persistence, with a generic error that does not repeat the secret. Existing state containing recognisable secrets is refused without rewriting it or creating migration backups; remove the credential securely and rotate it before retrying. Unknown or encoded secrets may not be detected. Murmurplex diagnostics redact recognisable secret patterns and 64-character hexadecimal strings. This is defence in depth, not a guarantee that arbitrary text is secret-free.
+
+On startup, old `.murmurplex/credentials/` and `.murmurplex/runtime.json` files are removed. Terminals created before the storage change must be closed and relaunched using **Resume Saved Agent**. Previously committed files are not removed from Git history, but their old tokens are no longer accepted by the restarted service.
 
 Project state is written through an atomic file replacement to `.murmurplex/state.json`. There is one writer per project directory. State is updated on each change, independently of an end-of-session handover. Add `.murmurplex/` to the target project's `.gitignore`.
 
@@ -131,7 +156,7 @@ The project directory must be on a persistent bind mount or volume if it is to s
 
 On reopening, saved agents are marked disconnected until their terminals can be reconnected. A restored terminal's actual agent state remains unknown until it reports status. Pending attention and mailbox items remain recorded. **Resume Saved Agent** preserves the identity and its mailbox; it starts a new CLI conversation, not a guaranteed continuation of the original CLI conversation.
 
-The service runs for the extension session. It stops when the extension deactivates; the project record remains on disk. Existing terminals discover fresh credentials from the project runtime file after a restart. After an abnormal crash, a stale `writer.lock` may need manual removal **after confirming no service still owns the project**. A second service will refuse to start rather than risk overwriting another writer's changes.
+The service runs for the extension session. It stops when the extension deactivates; the project record remains on disk. Reconnected terminals discover fresh credentials through their stable credential-file paths in extension storage after a restart. After an abnormal crash, a stale `writer.lock` may need manual removal **after confirming no service still owns the project**. A second service will refuse to start rather than risk overwriting another writer's changes.
 
 ### Prototype boundaries
 
@@ -141,6 +166,22 @@ The service runs for the extension session. It stops when the extension deactiva
 - Claude, Codex and Copilot terminals launched by Murmurplex have automatic lifecycle reporting for the events described above (Codex needs one-time hook trust; Copilot permission prompts and Codex questions are manual). Shell sessions and unsupported prompts require the helper or manual status command. Native terminal tabs/groups do not yet have dynamic attention styling; the Explorer list and aggregate status-bar indicator remain authoritative.
 - Task assignment and coordinator selection are persistent records. Automated delegation, active coordinator handover, idle-agent wakeup, PR discovery, repository reconciliation, and merge controls are not implemented yet. The handover instructs agents to check repository state and request approval; this prototype does not enforce external Git actions.
 - Backlog and decisions are accessible through the helper and handover; a dedicated backlog UI and richer PR/worktree records are next steps.
+
+### Repository secret protection
+
+This repository uses [Gitleaks](https://github.com/gitleaks/gitleaks) locally and in CI. Install Gitleaks 8.30.1 or later on PATH, then run:
+
+```sh
+npm run security:install-hook
+npm run security:scan
+npm run security:files
+```
+
+The hook scans staged changes before committing and fails closed if Gitleaks cannot run. Installation refuses to overwrite an existing hook setup; in that case, add `node scripts/scan-secrets.js staged` to your existing pre-commit hook. CI independently scans Git history and working files, with default provider rules plus a Murmurplex-runtime-token rule; scanner output is redacted. `.env` files are ignored, except `.env.example`, which must contain placeholders only.
+
+Hooks are checkout-local and can be bypassed. For server-side protection, a repository administrator can run `npm run security:github` after `gh auth login`, or enable secret scanning and push protection in the repository's **Settings > Security**. The command reports failure if authentication, permissions or feature availability prevent enabling them; adding a workflow does not itself enable GitHub push protection.
+
+These Git protections apply to this repository. Murmurplex does not silently install hooks or change GitHub settings in projects it manages. Set up equivalent protection in those repositories too. Scanning is best-effort: if a real secret has already been committed or pushed, revoke/rotate it and address Git history; adding ignore rules does not remove tracked secrets.
 
 ## Verify changes
 

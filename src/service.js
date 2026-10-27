@@ -4,17 +4,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, createHash } = require('node:crypto');
 const { Store } = require('./store');
+const { assertNoSecrets, redact, parseJSON } = require('./security');
 
 class ForbiddenError extends Error {}
 const digest = token => createHash('sha256').update(token).digest('hex');
 
-async function startService(directory, onChange = () => {}) {
-  const store = new Store(directory);
-  // Credentials are per agent and held only in memory; the files below are a delivery
-  // channel for the helper, so no secret appears in a terminal's environment.
-  const credentialsDirectory = path.join(directory, 'credentials');
+async function startService(directory, credentialsDirectory, onChange = () => {}) {
+  if (!path.isAbsolute(credentialsDirectory)) throw new Error('An absolute private credential directory is required.');
   const byDigest = new Map();
   const digestByAgent = new Map();
+  const store = new Store(directory, text => assertNoSecrets(text, token => byDigest.has(digest(token))));
   let url;
   const credentialFile = agentId => path.join(credentialsDirectory, `${agentId}.json`);
   const server = http.createServer(async (req, res) => {
@@ -28,40 +27,56 @@ async function startService(directory, onChange = () => {}) {
         payload += chunk;
         if (Buffer.byteLength(payload) > 65536) return respond(413, { error: 'Request too large' });
       }
-      const body = payload ? JSON.parse(payload) : {};
+      const body = payload ? parseJSON(payload, 'Request body') : {};
       const route = new URL(req.url, 'http://127.0.0.1');
       // An agent acts only as itself: a claimed identity must match its credential.
       const own = (claimed, name) => {
         if (claimed !== undefined && claimed !== null && claimed !== caller) throw new ForbiddenError(`${name} must be the calling agent.`);
         return caller;
       };
+      const requireCoordinator = () => {
+        if (store.snapshot().coordinatorId !== caller) throw new ForbiddenError('Only the coordinator can perform this operation.');
+      };
       let result;
-      if (req.method === 'GET' && route.pathname === '/state') return respond(200, store.snapshot());
+      if (req.method === 'GET' && route.pathname === '/state') return respond(200, store.snapshotFor(caller));
       if (req.method === 'GET' && route.pathname === '/inbox') return respond(200, store.inbox(own(route.searchParams.get('agentId') || undefined, 'agentId')));
       if (req.method !== 'POST') return respond(404, { error: 'Unknown endpoint' });
       switch (route.pathname) {
-        case '/agents': result = store.register(body); break;
+        case '/agents':
+        case '/coordinator': throw new ForbiddenError('Only the user can manage agents and coordinator selection through VS Code.');
         case '/status': result = store.status(own(body.agentId, 'agentId'), body.status); break;
         case '/hooks/claude': result = store.claudeHook(own(body.agentId, 'agentId'), body.event); break;
         case '/hooks/codex': result = store.codexHook(own(body.agentId, 'agentId'), body.event); break;
         case '/hooks/copilot': result = store.copilotHook(own(body.agentId, 'agentId'), body.event); break;
-        case '/coordinator': result = store.coordinator(body.agentId); break;
         case '/messages': result = store.send({ ...body, from: own(body.from, 'from') }); break;
         case '/ack': result = store.acknowledge(own(body.agentId, 'agentId'), body.messageId); break;
-        case '/tasks': result = store.task(body); break;
-        case '/decisions': result = store.decision(body.body); break;
+        case '/tasks': {
+          if (store.snapshot().coordinatorId === caller) result = store.task(body);
+          else {
+            const task = store.snapshot().tasks.find(task => task.id === body.id);
+            if (!task || task.ownerId !== caller || (body.ownerId !== undefined && body.ownerId !== caller)) {
+              throw new ForbiddenError('Workers can update only tasks assigned to themselves and cannot reassign them.');
+            }
+            result = store.task({ ...task, ...body, ownerId: caller });
+          }
+          break;
+        }
+        case '/decisions': requireCoordinator(); result = store.decision(body.body); break;
         default: return respond(404, { error: 'Unknown endpoint' });
       }
       // UI notifications must never turn a committed write into an apparent failure.
       try { onChange(store.snapshot()); } catch { /* State remains authoritative. */ }
       respond(200, result);
-    } catch (error) { respond(error instanceof ForbiddenError ? 403 : 400, { error: error.message }); }
+    } catch (error) { respond(error instanceof ForbiddenError ? 403 : 400, { error: redact(error.message) }); }
   });
   server.requestTimeout = 10000;
   server.headersTimeout = 10000;
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     url = `http://127.0.0.1:${server.address().port}`;
+    // Remove credentials left in the checkout by older releases.
+    fs.rmSync(path.join(directory, 'credentials'), { recursive: true, force: true });
+    fs.rmSync(path.join(directory, 'runtime.json'), { force: true });
     fs.rmSync(credentialsDirectory, { recursive: true, force: true });
     fs.mkdirSync(credentialsDirectory, { recursive: true, mode: 0o700 });
     return {

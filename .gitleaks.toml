@@ -1,0 +1,11 @@
+title = "Murmurplex secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "murmurplex-runtime-token"
+description = "Murmurplex runtime credentials must never be committed"
+regex = '''"token"\s*:\s*"([a-f0-9]{64})"'''
+secretGroup = 1
+keywords = ["token"]
