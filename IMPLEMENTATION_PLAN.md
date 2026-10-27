@@ -17,7 +17,7 @@ be used today.
 | Project record | Atomic writes, single writer, agents, coordinator identity, basic tasks, decisions, mailbox. | Schema migrations, crash recovery, richer records, reconciliation, bounded growth. |
 | Coordination | Saved coordinator selection, copyable handover. | Enforced authority, active handover, automatic delivery and wakeup. |
 | PR workflow | Handover text asks agents to verify state and get approval. | PR/review tracking, controlled merging, approval UI. |
-| Engineering | Node tests, syntax check, graphical test script. | No CI, no packaging, no compatibility testing against provider CLI versions. |
+| Engineering | Node tests, syntax check, graphical test script, GitHub Actions CI (Node 20/22, Xvfb VS Code test). | No packaging, no compatibility testing against provider CLI versions. |
 
 Validation recorded during the Claude integration (observations, not guarantees):
 
@@ -327,7 +327,9 @@ Consequences:
 
 ## Next step
 
-Set up CI (Node 20/22 tests, syntax checks, graphical test under a virtual
-display), then schema versioning and migrations, per-agent credentials and the
-VS Code UI-options investigation. The Claude, Copilot and Codex adapters are
-complete.
+Schema versioning and migrations, per-agent credentials and the VS Code
+UI-options investigation. The Claude, Copilot and Codex adapters are complete.
+CI (`.github/workflows/ci.yml`) runs syntax checks and unit tests on Node 20 and
+22, plus the graphical test under Xvfb with the latest stable VS Code. The
+graphical job is unverified until its first GitHub run. Provider-CLI
+compatibility checks (decision 3) are not in CI yet.

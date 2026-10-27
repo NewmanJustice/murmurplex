@@ -150,7 +150,7 @@ npm run test:vscode
 
 The first command tests persistence, recovery, single-writer protection, corrupt-state handling, message acknowledgement, authentication, request limits, grid geometry, Claude, Codex and Copilot hook reporting through the helper/service, and extension indicators. The second checks extension and service syntax.
 
-The VS Code integration test needs a graphical desktop and `code` on PATH (override with `VSCODE_CLI`). It launches an isolated temporary profile and project, checks real terminal tabs and groups, balanced pane sizes, persisted attention, and removal of a group while keeping its neighbour. It leaves its temporary logs for diagnosis and does not use your normal VS Code profile.
+The VS Code integration test needs a graphical desktop and `code` on PATH (override with `VSCODE_CLI`; add launch flags such as `--no-sandbox` with `VSCODE_ARGS`). CI runs it under Xvfb. It launches an isolated temporary profile and project, checks real terminal tabs and groups, balanced pane sizes, persisted attention, and removal of a group while keeping its neighbour. It leaves its temporary logs for diagnosis and does not use your normal VS Code profile.
 
 ## Architecture
 

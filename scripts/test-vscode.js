@@ -8,8 +8,10 @@ async function main() {
   const workspace = path.join(temporary, 'project');
   fs.mkdirSync(workspace);
   const root = path.resolve(__dirname, '..');
+  // Extra launch flags, such as --no-sandbox on CI runners without user namespaces.
+  const extra = (process.env.VSCODE_ARGS || '').split(/\s+/).filter(Boolean);
   const child = spawn(process.env.VSCODE_CLI || 'code', [
-    '--new-window', `--user-data-dir=${path.join(temporary, 'profile')}`,
+    ...extra, '--new-window', `--user-data-dir=${path.join(temporary, 'profile')}`,
     `--extensions-dir=${path.join(temporary, 'extensions')}`, '--disable-extensions',
     '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust',
     `--extensionDevelopmentPath=${root}`, `--extensionTestsPath=${path.join(root, 'test/vscode.integration.js')}`, workspace
