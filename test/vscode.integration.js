@@ -69,19 +69,24 @@ async function run() {
     await waitFor(() => vscode.window.tabGroups.all.length === 3, 'adding from an earlier group reused a neighbour instead of creating a group');
     vscode.window.terminals.find(t => t.name.includes(extra.id)).dispose();
     await waitFor(() => vscode.window.tabGroups.all.length === 2, 'extra group did not close');
-    const runtime = JSON.parse(fs.readFileSync(path.join(root, '.murmurplex/runtime.json'), 'utf8'));
-    const result = await fetch(runtime.url + '/status', { method: 'POST', headers: { Authorization: `Bearer ${runtime.token}` }, body: JSON.stringify({ agentId: worker.id, status: 'needs-permission' }) });
+    const credentials = JSON.parse(fs.readFileSync(path.join(root, '.murmurplex/credentials', `${worker.id}.json`), 'utf8'));
+    const result = await fetch(credentials.url + '/status', { method: 'POST', headers: { Authorization: `Bearer ${credentials.token}` }, body: JSON.stringify({ agentId: worker.id, status: 'needs-permission' }) });
     assert.equal(result.status, 200);
     assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.murmurplex/state.json'), 'utf8')).agents.find(a => a.id === worker.id).attention, 'needs-permission');
     const terminal = vscode.window.terminals.find(t => t.name.includes(worker.id));
+    const environment = terminal.creationOptions.env;
+    assert.ok(environment.MURMURPLEX_CREDENTIALS.endsWith(`${worker.id}.json`));
+    assert.ok(!Object.keys(environment).some(key => /TOKEN/.test(key)), 'no secret in the terminal environment');
     terminal.dispose();
     await waitFor(() => !vscode.window.terminals.includes(terminal), 'terminal did not close');
+    await waitFor(() => !fs.existsSync(environment.MURMURPLEX_CREDENTIALS), 'closing the terminal did not revoke its credential');
+    assert.equal((await fetch(credentials.url + '/status', { method: 'POST', headers: { Authorization: `Bearer ${credentials.token}` }, body: JSON.stringify({ status: 'working' }) })).status, 401);
     // The reviewer tab must survive closing its neighbour.
     assert.ok(vscode.window.terminals.some(t => t.name.includes(reviewer.id)));
     const reviewerTerminal = vscode.window.terminals.find(t => t.name.includes(reviewer.id));
     reviewerTerminal.dispose();
     await waitFor(() => vscode.window.tabGroups.all.length === 1, 'empty terminal group did not close');
-    fs.writeFileSync(path.join(root, 'integration-result.json'), JSON.stringify({ passed: true, checks: ['grid', 'tabs', 'balance', 'focus', 'attention', 'removal'] }));
+    fs.writeFileSync(path.join(root, 'integration-result.json'), JSON.stringify({ passed: true, checks: ['grid', 'tabs', 'balance', 'focus', 'attention', 'credentials', 'removal'] }));
     console.log('MURMURPLEX INTEGRATION PASS: terminal grid, nested tabs, balance, focus, persisted attention, removal.');
   } catch (error) {
     fs.writeFileSync(path.join(root, 'integration-result.json'), JSON.stringify({ passed: false, error: error.stack }));

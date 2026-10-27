@@ -109,8 +109,9 @@ test('Codex helper reports through the service, ignores prompt text and never bl
   const service = await startService(path.join(root, '.murmurplex'));
   t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Codex', kind: 'codex' });
+  service.issueCredential(agent.id);
   const helper = path.resolve(__dirname, '../bin/murmurplex-agent');
-  const environment = { ...process.env, MURMURPLEX_PROJECT: root, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_URL: service.url, MURMURPLEX_TOKEN: service.token };
+  const environment = { ...process.env, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_CREDENTIALS: service.credentialFile(agent.id) };
   const run = input => runCommand(process.execPath, [helper, 'codex-hook'], environment, input);
   assert.deepEqual(await run(event('SessionStart', { source: 'startup', model: 'private-model' })), { code: 0, stdout: '', stderr: '' });
   assert.deepEqual(await run(event('UserPromptSubmit', { prompt: 'private prompt text', transcript_path: null })), { code: 0, stdout: '', stderr: '' });
@@ -126,7 +127,7 @@ test('Codex helper reports through the service, ignores prompt text and never bl
     assert.match(result.stderr, /Codex status reporting failed:/);
     assert.deepEqual(service.store.snapshot(), before);
   }
-  const unreachable = await runCommand(process.execPath, [helper, 'codex-hook'], { ...process.env, MURMURPLEX_PROJECT: root, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_URL: undefined }, event('Stop'));
+  const unreachable = await runCommand(process.execPath, [helper, 'codex-hook'], { ...process.env, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_CREDENTIALS: path.join(root, 'missing.json') }, event('Stop'));
   assert.equal(unreachable.code, 0);
 });
 

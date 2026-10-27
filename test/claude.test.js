@@ -41,6 +41,7 @@ test('configured Claude hooks run silently through the helper, authenticated ser
   let service = await startService(path.join(root, '.murmurplex'));
   t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Claude', kind: 'claude' });
+  service.issueCredential(agent.id);
   // Exercise exec-form argument handling without shell interpolation.
   const extensionRoot = path.join(root, "extension with spaces and 'quotes'");
   const helper = path.join(extensionRoot, 'bin', 'murmurplex-agent');
@@ -51,7 +52,7 @@ test('configured Claude hooks run silently through the helper, authenticated ser
   fs.copyFileSync(path.resolve(__dirname, '../src/codex.js'), path.join(extensionRoot, 'src', 'codex.js'));
   fs.copyFileSync(path.resolve(__dirname, '../src/copilot.js'), path.join(extensionRoot, 'src', 'copilot.js'));
   const settings = claudeSettings(helper);
-  const environment = { ...process.env, MURMURPLEX_PROJECT: root, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_URL: service.url, MURMURPLEX_TOKEN: service.token };
+  const environment = { ...process.env, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_CREDENTIALS: service.credentialFile(agent.id) };
   const hook = async (name, fields = {}) => {
     const result = await runHook(settings.hooks[name][0].hooks[0], environment, event(name, fields));
     assert.deepEqual(result, { code: 0, stdout: '', stderr: '' });
@@ -67,9 +68,10 @@ test('configured Claude hooks run silently through the helper, authenticated ser
   assert.doesNotMatch(persisted, /Private question text|private\/transcript/);
   await service.close();
   service = await startService(path.join(root, '.murmurplex'));
+  service.issueCredential(agent.id);
   assert.equal(service.store.agent(agent.id).status, 'disconnected');
   assert.equal(service.store.agent(agent.id).attention, 'needs-input');
-  // Stale credentials in the environment must not break reporting after restart.
+  // The terminal's environment points at the credential file, which the restarted service reissues.
   const answered = await hook('PostToolUse', {
     tool_name: 'AskUserQuestion', tool_use_id: 'question',
     tool_response: { answer: 'Private answer '.repeat(10000) }

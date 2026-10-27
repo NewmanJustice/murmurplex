@@ -70,34 +70,65 @@ test('corrupt state fails visibly without overwriting it or leaking the lock', t
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+const tokenOf = (service, id) => JSON.parse(fs.readFileSync(service.credentialFile(id), 'utf8')).token;
+
 test('service authentication, mailbox, invalid requests and restart recovery', async t => {
   const directory = temporary(t);
   let service = await startService(directory);
   t.after(async () => { if (service) await service.close(); fs.rmSync(directory, { recursive: true, force: true }); });
-  const request = (endpoint, body, token = service.token, origin) => fetch(service.url + endpoint, {
+  const lead = service.store.register({ name: 'Coordinator', kind: 'copilot' });
+  const worker = service.store.register({ name: 'Worker', kind: 'codex' });
+  service.issueCredential(lead.id); service.issueCredential(worker.id);
+  const request = (endpoint, body, token, origin) => fetch(service.url + endpoint, {
     method: body ? 'POST' : 'GET',
-    headers: { Authorization: `Bearer ${token}`, ...(origin ? { Origin: origin } : {}) },
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(origin ? { Origin: origin } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {})
   });
+  const asLead = (endpoint, body) => request(endpoint, body, tokenOf(service, lead.id));
+  const asWorker = (endpoint, body) => request(endpoint, body, tokenOf(service, worker.id));
+  assert.equal((await request('/state')).status, 401);
   assert.equal((await request('/state', null, 'wrong')).status, 401);
-  assert.equal((await request('/state', null, service.token, 'https://example.com')).status, 401);
-  const lead = await (await request('/agents', { name: 'Coordinator', kind: 'copilot' })).json();
-  const worker = await (await request('/agents', { name: 'Worker', kind: 'codex' })).json();
-  assert.equal((await request('/messages', { from: lead.id, to: worker.id, body: 'Please review.' })).status, 200);
-  assert.equal((await request('/status', { agentId: worker.id, status: 'invalid' })).status, 400);
-  assert.equal((await request('/missing')).status, 404);
-  assert.equal((await fetch(service.url + '/status', { method: 'POST', headers: { Authorization: `Bearer ${service.token}` }, body: '{broken' })).status, 400);
-  assert.equal((await fetch(service.url + '/status', { method: 'POST', headers: { Authorization: `Bearer ${service.token}` }, body: 'x'.repeat(70000) })).status, 413);
-  const oldToken = service.token;
+  assert.equal((await request('/state', null, tokenOf(service, lead.id), 'https://example.com')).status, 401);
+  assert.equal((await asLead('/messages', { from: lead.id, to: worker.id, body: 'Please review.' })).status, 200);
+  assert.equal((await asLead('/messages', { to: worker.id, body: 'The sender defaults to the caller.' })).status, 200);
+  assert.equal((await asWorker('/status', { agentId: worker.id, status: 'invalid' })).status, 400);
+  assert.equal((await asWorker('/missing')).status, 404);
+  assert.equal((await request('/status', { status: 'idle' }, tokenOf(service, worker.id)).then(r => r.status)), 200);
+  assert.equal((await fetch(service.url + '/status', { method: 'POST', headers: { Authorization: `Bearer ${tokenOf(service, worker.id)}` }, body: '{broken' })).status, 400);
+  assert.equal((await fetch(service.url + '/status', { method: 'POST', headers: { Authorization: `Bearer ${tokenOf(service, worker.id)}` }, body: 'x'.repeat(70000) })).status, 413);
+  // An agent cannot act as another agent or as the user.
+  const before = service.store.snapshot();
+  for (const [endpoint, body] of [
+    ['/status', { agentId: lead.id, status: 'needs-permission' }],
+    ['/messages', { from: lead.id, to: worker.id, body: 'spoofed' }],
+    ['/messages', { from: 'user', to: lead.id, body: 'spoofed' }],
+    ['/ack', { agentId: lead.id, messageId: 'any' }],
+    ['/hooks/codex', { agentId: lead.id, event: {} }]
+  ]) assert.equal((await asWorker(endpoint, body)).status, 403, `${endpoint} ${JSON.stringify(body)}`);
+  assert.equal((await asWorker(`/inbox?agentId=${lead.id}`)).status, 403);
+  assert.deepEqual(service.store.snapshot(), before);
+  assert.equal(fs.statSync(service.credentialFile(worker.id)).mode & 0o777, 0o600);
+  assert.equal(fs.existsSync(path.join(directory, 'runtime.json')), false, 'no shared credential is written');
+  const oldToken = tokenOf(service, worker.id);
+  service.issueCredential(worker.id);
+  assert.notEqual(tokenOf(service, worker.id), oldToken);
+  assert.equal((await request('/state', null, oldToken)).status, 401, 'rotation revokes the earlier token');
+  assert.equal((await asWorker('/state')).status, 200);
+  const stale = tokenOf(service, worker.id);
+  service.revokeCredential(worker.id);
+  assert.equal(fs.existsSync(service.credentialFile(worker.id)), false);
+  assert.equal((await request('/state', null, stale)).status, 401, 'revocation takes effect immediately');
+  service.issueCredential(worker.id);
   await service.close(); service = undefined;
-  assert.equal(fs.existsSync(path.join(directory, 'runtime.json')), false);
+  assert.equal(fs.existsSync(path.join(directory, 'credentials')), false);
   service = await startService(directory);
-  assert.notEqual(service.token, oldToken);
-  assert.equal((await request('/state', null, oldToken)).status, 401);
-  const inbox = await (await request(`/inbox?agentId=${worker.id}`)).json();
-  assert.equal(inbox.length, 1);
-  assert.equal((await request('/ack', { agentId: lead.id, messageId: inbox[0].id })).status, 400);
-  assert.equal((await request('/ack', { agentId: worker.id, messageId: inbox[0].id })).status, 200);
+  assert.equal(fs.readdirSync(path.join(directory, 'credentials')).length, 0, 'credentials never survive a restart');
+  assert.equal((await request('/state', null, stale)).status, 401);
+  service.issueCredential(lead.id); service.issueCredential(worker.id);
+  const inbox = await (await asWorker(`/inbox`)).json();
+  assert.equal(inbox.length, 2);
+  assert.equal((await asLead('/ack', { agentId: lead.id, messageId: inbox[0].id })).status, 400);
+  assert.equal((await asWorker('/ack', { agentId: worker.id, messageId: inbox[0].id })).status, 200);
 });
 
 test('CLI help documents queued delivery without requiring credentials', () => {
@@ -105,23 +136,30 @@ test('CLI help documents queued delivery without requiring credentials', () => {
   assert.equal(result.status, 0); assert.match(result.stdout, /does not wake another agent/);
 });
 
-test('agent helper reads refreshed runtime credentials after a service restart', async t => {
+test('agent helper reads refreshed credentials after a service restart and never needs a token in its environment', async t => {
   const { promisify } = require('node:util');
   const execFile = promisify(require('node:child_process').execFile);
   const directory = temporary(t);
   let service = await startService(path.join(directory, '.murmurplex'));
   t.after(async () => { if (service) await service.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Restored worker', kind: 'shell' });
-  const oldEnvironment = { ...process.env, MURMURPLEX_PROJECT: directory, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_URL: service.url, MURMURPLEX_TOKEN: service.token };
+  service.issueCredential(agent.id);
+  const environment = { ...process.env, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_CREDENTIALS: service.credentialFile(agent.id) };
+  assert.equal(Object.keys(environment).some(key => /TOKEN/.test(key) && key.startsWith('MURMURPLEX')), false);
   await service.close(); service = undefined;
   service = await startService(path.join(directory, '.murmurplex'));
+  service.issueCredential(agent.id);
   const helper = path.join(__dirname, '../bin/murmurplex-agent');
-  const sent = await execFile(process.execPath, [helper, 'send', agent.id, 'Message after restart'], { env: oldEnvironment });
+  const sent = await execFile(process.execPath, [helper, 'send', agent.id, 'Message after restart'], { env: environment });
   const message = JSON.parse(sent.stdout);
-  const received = await execFile(process.execPath, [helper, 'inbox'], { env: oldEnvironment });
+  assert.equal(message.from, agent.id);
+  const received = await execFile(process.execPath, [helper, 'inbox'], { env: environment });
   assert.equal(JSON.parse(received.stdout)[0].id, message.id);
-  await execFile(process.execPath, [helper, 'status', 'needs-input'], { env: oldEnvironment });
+  await execFile(process.execPath, [helper, 'status', 'needs-input'], { env: environment });
   assert.equal(service.store.agent(agent.id).attention, 'needs-input');
-  await execFile(process.execPath, [helper, 'ack', message.id], { env: oldEnvironment });
+  await execFile(process.execPath, [helper, 'ack', message.id], { env: environment });
   assert.equal(service.store.inbox(agent.id).length, 0);
+  service.revokeCredential(agent.id);
+  await assert.rejects(execFile(process.execPath, [helper, 'status', 'idle'], { env: environment }), /ENOENT/);
+  await assert.rejects(execFile(process.execPath, [helper, 'status', 'idle'], { env: { ...process.env, MURMURPLEX_AGENT_ID: agent.id } }), /No Murmurplex credentials/);
 });

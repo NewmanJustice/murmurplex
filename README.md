@@ -121,7 +121,7 @@ Codex has no question or tool-failure event, so questions and denied permissions
 
 The workspace extension and service run in the project environment, including inside a devcontainer. One project service is active per development-host window in this prototype.
 
-The service listens on a random loopback port, requires a random bearer token, and rejects browser-origin requests. Runtime credentials are kept in `.murmurplex/runtime.json` with owner-only permissions. Do not forward this port or commit runtime credentials. Local project agents share the same trust boundary; the token is not per-agent access control.
+The service listens on a random loopback port and rejects browser-origin requests. Each agent gets its own random token, held only in memory by the service and delivered through an owner-only file (`.murmurplex/credentials/<agent>.json`) that the helper reads on every call; no secret appears in terminal environments, process listings or transcripts. The service attributes requests to the calling agent and rejects status, inbox, hook and message calls that claim another agent's identity. Tokens are revoked when a terminal closes and wiped on restart. Do not forward the port or commit `.murmurplex/`. Limitation: processes running as the same OS user can read other agents' credential files, so this stops accidental and prompt-level spoofing, not malicious local code. Coordinator-only controls are not yet enforced.
 
 Project state is written through an atomic file replacement to `.murmurplex/state.json`. There is one writer per project directory. State is updated on each change, independently of an end-of-session handover. Add `.murmurplex/` to the target project's `.gitignore`.
 

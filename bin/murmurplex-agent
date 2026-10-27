@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 const fs = require('node:fs');
-const path = require('node:path');
 const { claudeEvent } = require('../src/claude');
 const { codexEvent } = require('../src/codex');
 const { copilotEvent } = require('../src/copilot');
@@ -12,10 +11,6 @@ async function main() {
     console.log(`Murmurplex project mailbox\n\nstate\ninbox\nsend <recipient-id> <message...>\nack <message-id>\nstatus <working|idle|needs-input|needs-permission|finished>\ntask <title> [status] [owner-id] [existing-task-id]\ndecision <text...>\n\nRun inside a Murmurplex terminal; messages are durable and require explicit acknowledgement.\nReading an inbox does not wake another agent or submit a prompt to its terminal.`);
     return;
   }
-  let runtime;
-  if (process.env.MURMURPLEX_PROJECT) runtime = JSON.parse(fs.readFileSync(path.join(process.env.MURMURPLEX_PROJECT, '.murmurplex/runtime.json'), 'utf8'));
-  else if (process.env.MURMURPLEX_URL && process.env.MURMURPLEX_TOKEN) runtime = { url: process.env.MURMURPLEX_URL, token: process.env.MURMURPLEX_TOKEN };
-  else runtime = JSON.parse(fs.readFileSync(path.join(process.env.MURMURPLEX_PROJECT || process.cwd(), '.murmurplex/runtime.json'), 'utf8'));
   const agentId = process.env.MURMURPLEX_AGENT_ID;
   let endpoint, body;
   switch (command) {
@@ -34,18 +29,26 @@ async function main() {
       break;
     }
     case 'state': endpoint = '/state'; break;
-    case 'inbox': endpoint = `/inbox?agentId=${encodeURIComponent(agentId || '')}`; break;
-    case 'send': endpoint = '/messages'; body = { from: agentId || 'user', to: args[0], body: args.slice(1).join(' ') }; break;
+    case 'inbox': endpoint = agentId ? `/inbox?agentId=${encodeURIComponent(agentId)}` : '/inbox'; break;
+    case 'send': endpoint = '/messages'; body = { from: agentId, to: args[0], body: args.slice(1).join(' ') }; break;
     case 'ack': endpoint = '/ack'; body = { agentId, messageId: args[0] }; break;
     case 'status': endpoint = '/status'; body = { agentId, status: args[0] }; break;
     case 'task': endpoint = '/tasks'; body = { title: args[0], status: args[1], ownerId: args[2], id: args[3] }; break;
     case 'decision': endpoint = '/decisions'; body = { body: args.join(' ') }; break;
     default: throw new Error('Unknown command; use murmurplex-agent help.');
   }
-  const response = await fetch(runtime.url + endpoint, {
-    method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${runtime.token}`, 'Content-Type': 'application/json' },
-    ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(5000)
-  });
+  // The credential is read on every call so rotation and service restarts reach running terminals.
+  const send = async () => {
+    const credentials = process.env.MURMURPLEX_CREDENTIALS;
+    if (!credentials) throw new Error('No Murmurplex credentials: run this inside a Murmurplex terminal.');
+    const runtime = JSON.parse(fs.readFileSync(credentials, 'utf8'));
+    return fetch(runtime.url + endpoint, {
+      method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${runtime.token}`, 'Content-Type': 'application/json' },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(5000)
+    });
+  };
+  let response = await send();
+  if (response.status === 401) response = await send();
   const value = await response.json();
   if (!response.ok) throw new Error(value.error);
   if (!command.endsWith('-hook')) console.log(JSON.stringify(value, null, 2));

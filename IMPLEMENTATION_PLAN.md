@@ -86,7 +86,9 @@ These are small and time-boxed. They change later designs, so decide them first.
 4. **State schema versioning and migrations.** The Claude adapter already added
    `agent.claude` while `version` is still 1. Introduce a versioned schema,
    validation and tested migrations before any further record changes.
-5. **Per-agent credentials.** The shared token gives every local agent full
+5. **Per-agent credentials (done).** Delivered as in-memory tokens in 0600
+   credential files; process-ancestry identity over a Unix socket is a possible
+   later hardening. Original problem: the shared token gives every local agent full
    access and allows status spoofing. Introduce per-agent credentials (separate
    from durable state) so the service can attribute requests, enforce roles,
    and limit status/hook reporting to the matching agent. Document the remaining
@@ -327,7 +329,8 @@ Consequences:
 
 ## Next step
 
-Per-agent credentials (decision 5) and the VS Code UI-options investigation.
+The VS Code UI-options investigation. Per-agent credentials are done (decision
+5): identity is enforced per agent; coordinator authority is not yet enforced.
 State schema versioning is done: version 2, tested migration from version 1,
 validation, one-time backups and refusal of newer state (decision 4). Crash
 recovery and bounded growth remain open. The Claude, Copilot and Codex adapters

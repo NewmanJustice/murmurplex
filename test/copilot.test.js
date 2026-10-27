@@ -95,11 +95,12 @@ test('the shipped Copilot plugin hooks reach the service through the helper on P
   const service = await startService(path.join(root, '.murmurplex'));
   t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Copilot', kind: 'copilot' });
+  service.issueCredential(agent.id);
   const plugin = path.resolve(__dirname, '../copilot-plugin');
   const manifest = JSON.parse(fs.readFileSync(path.join(plugin, 'plugin.json'), 'utf8'));
   const { hooks } = JSON.parse(fs.readFileSync(path.join(plugin, manifest.hooks), 'utf8'));
   const environment = {
-    ...process.env, MURMURPLEX_PROJECT: root, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_URL: service.url, MURMURPLEX_TOKEN: service.token,
+    ...process.env, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_CREDENTIALS: service.credentialFile(agent.id),
     PATH: `${path.resolve(__dirname, '../bin')}${path.delimiter}${process.env.PATH}`
   };
   const run = (name, input) => runCommand('bash', ['-c', hooks[name][0].bash], environment, input);
@@ -130,7 +131,7 @@ test('the shipped Copilot plugin hooks reach the service through the helper on P
 test('Copilot hook reporting failures are diagnostic only, while ordinary helper failures exit nonzero', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'murmurplex-copilot-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const environment = { ...process.env, MURMURPLEX_PROJECT: root, MURMURPLEX_AGENT_ID: 'copilot' };
+  const environment = { ...process.env, MURMURPLEX_AGENT_ID: 'copilot', MURMURPLEX_CREDENTIALS: path.join(root, 'missing.json') };
   const helper = path.resolve(__dirname, '../bin/murmurplex-agent');
   const result = await runCommand(process.execPath, [helper, 'copilot-hook'], environment, event('PreToolUse', { tool_name: 'Bash' }));
   assert.equal(result.code, 0);

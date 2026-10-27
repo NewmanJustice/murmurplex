@@ -56,10 +56,10 @@ function activate(context) {
       // Reconnect terminals VS Code restored. Their names include stable IDs.
       for (const agent of state().agents) {
         const terminal = vscode.window.terminals.find(t => t.name.includes(`[${agent.id}]`));
-        if (terminal) { terminals.set(agent.id, terminal); service.store.status(agent.id, 'unknown'); }
+        if (terminal) { terminals.set(agent.id, terminal); service.issueCredential(agent.id); service.store.status(agent.id, 'unknown'); }
       }
       enabled = true; refresh();
-      output.appendLine(`Project service started for ${root}. Runtime credentials are kept in .murmurplex/runtime.json.`);
+      output.appendLine(`Project service started for ${root}. Per-agent credentials are kept in .murmurplex/credentials.`);
       return service;
     })();
     try { return await starting; } finally { starting = undefined; }
@@ -102,11 +102,12 @@ function activate(context) {
     const reuseEmpty = groups.length === 1 && groups[0].tabs.length === 0;
     if (newGroup && !reuseEmpty && groups.length >= 9) throw new Error('The prototype supports up to nine editor groups. Add a tab to an existing group instead.');
     const agent = existing || service.store.register({ kind, name });
+    service.issueCredential(agent.id);
     const coordinator = agent.id === state().coordinatorId;
     const label = `${coordinator ? '★ ' : ''}${name} [${agent.id}]`;
     const environment = {
       MURMURPLEX_PROJECT: root, MURMURPLEX_AGENT_ID: agent.id,
-      MURMURPLEX_URL: service.url, MURMURPLEX_TOKEN: service.token,
+      MURMURPLEX_CREDENTIALS: service.credentialFile(agent.id),
       PATH: `${path.join(context.extensionPath, 'bin')}${path.delimiter}${process.env.PATH || ''}`
     };
     let terminal;
@@ -125,7 +126,7 @@ function activate(context) {
         message: `Murmurplex ${coordinator ? 'coordinator' : 'worker'} · ${name}\r\nMailbox: murmurplex-agent help · Use “Copy Project Handover” for agent context.\r\n`
       });
       terminals.set(agent.id, terminal); terminal.show();
-    } catch (error) { service.store.status(agent.id, 'disconnected'); throw error; }
+    } catch (error) { service.revokeCredential(agent.id); service.store.status(agent.id, 'disconnected'); throw error; }
     refresh(); scheduleBalance();
     if (kind === 'codex') checkCodexTrust();
     return agent;
@@ -189,7 +190,7 @@ function activate(context) {
     vscode.window.onDidCloseTerminal(terminal => {
       for (const [id, entry] of terminals) if (entry === terminal) {
         terminals.delete(id);
-        if (service) { service.store.status(id, 'disconnected'); refresh(); }
+        if (service) { service.revokeCredential(id); service.store.status(id, 'disconnected'); refresh(); }
       }
       scheduleBalance();
     }),
