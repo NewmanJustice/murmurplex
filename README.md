@@ -125,6 +125,8 @@ The service listens on a random loopback port, requires a random bearer token, a
 
 Project state is written through an atomic file replacement to `.murmurplex/state.json`. There is one writer per project directory. State is updated on each change, independently of an end-of-session handover. Add `.murmurplex/` to the target project's `.gitignore`.
 
+State is versioned (currently 2). Opening an older project migrates it in memory, validates it, and keeps the original as `state.json.v<N>.bak` (written once, never overwritten) before the first write. State written by a newer Murmurplex, or state that fails validation, is refused and left untouched; there are no downgrades. Migrations live in `src/migrations.js`.
+
 The project directory must be on a persistent bind mount or volume if it is to survive container rebuilds. Back up `.murmurplex/state.json` alongside other important local project data. The included devcontainer mounts the source workspace using the standard Dev Containers workspace mount.
 
 On reopening, saved agents are marked disconnected until their terminals can be reconnected. A restored terminal's actual agent state remains unknown until it reports status. Pending attention and mailbox items remain recorded. **Resume Saved Agent** preserves the identity and its mailbox; it starts a new CLI conversation, not a guaranteed continuation of the original CLI conversation.

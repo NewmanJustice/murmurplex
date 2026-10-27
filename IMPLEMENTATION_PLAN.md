@@ -14,7 +14,7 @@ be used today.
 | --- | --- | --- |
 | Terminal workspace | Native editor groups, agent tabs, automatic grid balancing, passing graphical validation. | Maximise/restore, isolation from source-editor groups. |
 | Lifecycle and attention | Claude, Codex and Copilot hook adapters, persistent requests, quiet Explorer/status-bar indicators, manual fallback. | Copilot permission prompts, Codex questions, unsupported Claude prompts, tab/group indicators. |
-| Project record | Atomic writes, single writer, agents, coordinator identity, basic tasks, decisions, mailbox. | Schema migrations, crash recovery, richer records, reconciliation, bounded growth. |
+| Project record | Atomic writes, single writer, agents, coordinator identity, basic tasks, decisions, mailbox, versioned schema with tested migrations and backups. | Crash recovery, richer records, reconciliation, bounded growth. |
 | Coordination | Saved coordinator selection, copyable handover. | Enforced authority, active handover, automatic delivery and wakeup. |
 | PR workflow | Handover text asks agents to verify state and get approval. | PR/review tracking, controlled merging, approval UI. |
 | Engineering | Node tests, syntax check, graphical test script, GitHub Actions CI (Node 20/22, Xvfb VS Code test). | No packaging, no compatibility testing against provider CLI versions. |
@@ -327,8 +327,11 @@ Consequences:
 
 ## Next step
 
-Schema versioning and migrations, per-agent credentials and the VS Code
-UI-options investigation. The Claude, Copilot and Codex adapters are complete.
+Per-agent credentials (decision 5) and the VS Code UI-options investigation.
+State schema versioning is done: version 2, tested migration from version 1,
+validation, one-time backups and refusal of newer state (decision 4). Crash
+recovery and bounded growth remain open. The Claude, Copilot and Codex adapters
+are complete.
 CI (`.github/workflows/ci.yml`) runs syntax checks and unit tests on Node 20 and
 22, plus the graphical test under Xvfb with the latest stable VS Code. The
 graphical job is unverified until its first GitHub run. Provider-CLI

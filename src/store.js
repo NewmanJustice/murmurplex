@@ -5,6 +5,7 @@ const { randomUUID } = require('node:crypto');
 const { claudeEvent, applyClaudeEvent } = require('./claude');
 const { codexEvent, applyCodexEvent } = require('./codex');
 const { copilotEvent, applyCopilotEvent } = require('./copilot');
+const { CURRENT_VERSION, migrate } = require('./migrations');
 const STATES = new Set(['working', 'idle', 'needs-input', 'needs-permission', 'finished', 'disconnected', 'unknown']);
 const TASK_STATES = new Set(['backlog', 'in-progress', 'blocked', 'review', 'done']);
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -26,12 +27,19 @@ class Store {
     try {
       fs.writeFileSync(this.lockFd, `${process.pid}\n`);
       this.filename = path.join(directory, 'state.json');
-      try { this.state = JSON.parse(fs.readFileSync(this.filename, 'utf8')); }
-      catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-        this.state = { version: 1, revision: 0, coordinatorId: null, agents: [], tasks: [], messages: [], decisions: [] };
+      let raw;
+      try { raw = fs.readFileSync(this.filename, 'utf8'); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (raw === undefined) this.state = { version: CURRENT_VERSION, revision: 0, coordinatorId: null, agents: [], tasks: [], messages: [], decisions: [] };
+      else {
+        const { state, from } = migrate(JSON.parse(raw), STATES);
+        // Keep the pre-migration file once per source version; never overwrite an earlier backup.
+        if (from !== CURRENT_VERSION) {
+          try { fs.writeFileSync(`${this.filename}.v${from}.bak`, raw, { flag: 'wx', mode: 0o600 }); }
+          catch (error) { if (error.code !== 'EEXIST') throw error; }
+        }
+        this.state = state;
       }
-      if (this.state.version !== 1 || !['agents', 'tasks', 'messages', 'decisions'].every(key => Array.isArray(this.state[key]))) throw new Error('Unsupported or invalid project state; original file has been preserved.');
       // A restored project record does not prove the old process is still running.
       this.update(next => { for (const agent of next.agents) agent.status = 'disconnected'; });
     } catch (error) { this.close(); throw error; }
