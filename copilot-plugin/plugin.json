@@ -1,0 +1,6 @@
+{
+  "name": "murmurplex",
+  "version": "0.0.1",
+  "description": "Reports Copilot CLI lifecycle events to Murmurplex.",
+  "hooks": "hooks/hooks.json"
+}

@@ -2,6 +2,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { claudeEvent, applyClaudeEvent } = require('./claude');
+const { copilotEvent, applyCopilotEvent } = require('./copilot');
 const STATES = new Set(['working', 'idle', 'needs-input', 'needs-permission', 'finished', 'disconnected', 'unknown']);
 const TASK_STATES = new Set(['backlog', 'in-progress', 'blocked', 'review', 'done']);
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -74,8 +76,27 @@ class Store {
     return this.update(next => {
       const agent = next.agents.find(a => a.id === id);
       agent.status = status;
+      if (!['unknown', 'disconnected'].includes(status)) for (const key of ['claude', 'copilot']) if (agent[key]) agent[key].requests = [];
       if (['needs-input', 'needs-permission'].includes(status)) agent.attention = status;
       else if (['working', 'idle', 'finished'].includes(status)) agent.attention = null;
+      return agent;
+    });
+  }
+  claudeHook(id, input) {
+    if (this.agent(id).kind !== 'claude') throw new Error('Claude hooks require a Claude agent.');
+    const event = claudeEvent(input);
+    return this.update(next => {
+      const agent = next.agents.find(a => a.id === id);
+      applyClaudeEvent(agent, event);
+      return agent;
+    });
+  }
+  copilotHook(id, input) {
+    if (this.agent(id).kind !== 'copilot') throw new Error('Copilot hooks require a Copilot agent.');
+    const event = copilotEvent(input);
+    return this.update(next => {
+      const agent = next.agents.find(a => a.id === id);
+      applyCopilotEvent(agent, event);
       return agent;
     });
   }

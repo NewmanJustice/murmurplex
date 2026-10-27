@@ -1,0 +1,221 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+const { Store } = require('../src/store');
+const { startService } = require('../src/service');
+const { claudeSettings } = require('../src/claude');
+
+function project() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'murmurplex-claude-'));
+}
+
+function storeProject(t) {
+  const root = project();
+  const store = new Store(root);
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  return store;
+}
+
+function event(name, fields = {}) {
+  return { hook_event_name: name, session_id: 'conversation', ...fields };
+}
+
+function runHook(handler, environment, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(handler.command, handler.args, { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', data => { stdout += data; });
+    child.stderr.on('data', data => { stderr += data; });
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, stdout, stderr }));
+    child.stdin.end(typeof input === 'string' ? input : JSON.stringify(input));
+  });
+}
+
+test('configured Claude hooks run silently through the helper, authenticated service and restart', async t => {
+  const root = project();
+  let service = await startService(path.join(root, '.murmurplex'));
+  t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = service.store.register({ name: 'Claude', kind: 'claude' });
+  // Exercise exec-form argument handling without shell interpolation.
+  const extensionRoot = path.join(root, "extension with spaces and 'quotes'");
+  const helper = path.join(extensionRoot, 'bin', 'murmurplex-agent');
+  fs.mkdirSync(path.dirname(helper), { recursive: true });
+  fs.mkdirSync(path.join(extensionRoot, 'src'));
+  fs.copyFileSync(path.resolve(__dirname, '../bin/murmurplex-agent'), helper);
+  fs.copyFileSync(path.resolve(__dirname, '../src/claude.js'), path.join(extensionRoot, 'src', 'claude.js'));
+  fs.copyFileSync(path.resolve(__dirname, '../src/copilot.js'), path.join(extensionRoot, 'src', 'copilot.js'));
+  const settings = claudeSettings(helper);
+  const environment = { ...process.env, MURMURPLEX_PROJECT: root, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_URL: service.url, MURMURPLEX_TOKEN: service.token };
+  const hook = async (name, fields = {}) => {
+    const result = await runHook(settings.hooks[name][0].hooks[0], environment, event(name, fields));
+    assert.deepEqual(result, { code: 0, stdout: '', stderr: '' });
+    return service.store.agent(agent.id);
+  };
+  await hook('SessionStart');
+  assert.equal((await hook('UserPromptSubmit')).status, 'working');
+  assert.equal((await hook('PreToolUse', {
+    tool_name: 'AskUserQuestion', tool_use_id: 'question',
+    tool_input: { questions: ['Private question text'] }, transcript_path: '/private/transcript'
+  })).attention, 'needs-input');
+  const persisted = fs.readFileSync(path.join(root, '.murmurplex/state.json'), 'utf8');
+  assert.doesNotMatch(persisted, /Private question text|private\/transcript/);
+  await service.close();
+  service = await startService(path.join(root, '.murmurplex'));
+  assert.equal(service.store.agent(agent.id).status, 'disconnected');
+  assert.equal(service.store.agent(agent.id).attention, 'needs-input');
+  // Stale credentials in the environment must not break reporting after restart.
+  const answered = await hook('PostToolUse', {
+    tool_name: 'AskUserQuestion', tool_use_id: 'question',
+    tool_response: { answer: 'Private answer '.repeat(10000) }
+  });
+  assert.equal(answered.attention, null);
+  assert.equal(answered.status, 'working');
+  assert.equal((await hook('Stop')).status, 'finished');
+  assert.equal(service.store.snapshot().tasks.length, 0, 'a completed response is not a completed backlog task');
+  const invalid = await runHook(settings.hooks.Stop[0].hooks[0], environment, '{broken');
+  assert.equal(invalid.code, 1);
+  assert.equal(invalid.stdout, '');
+  assert.match(invalid.stderr, /Murmurplex:/);
+});
+
+test('parallel tools and subagents cannot clear another outstanding request', t => {
+  const store = storeProject(t);
+  const agent = store.register({ name: 'Claude', kind: 'claude' });
+  const hook = (name, fields = {}) => store.claudeHook(agent.id, event(name, fields));
+  hook('SessionStart');
+  hook('PreToolUse', { tool_name: 'Bash', tool_use_id: 'first' });
+  hook('PreToolUse', { tool_name: 'Bash', tool_use_id: 'second' });
+  hook('PermissionRequest', { tool_name: 'Bash' });
+  hook('PreToolUse', { tool_name: 'AskUserQuestion', tool_use_id: 'question', agent_id: 'child' });
+  hook('PostToolUse', { tool_name: 'Bash', tool_use_id: 'unrelated', agent_id: 'child' });
+  assert.equal(hook('PostToolUse', { tool_name: 'Bash', tool_use_id: 'first' }).attention, 'needs-permission');
+  assert.equal(hook('PostToolUse', { tool_name: 'Bash', tool_use_id: 'second' }).attention, 'needs-input');
+  assert.equal(hook('Stop').attention, 'needs-input');
+  assert.equal(hook('UserPromptSubmit').attention, 'needs-input', 'autonomous prompt submissions do not imply an answer');
+  hook('Stop', { agent_id: 'child' });
+  hook('SessionEnd', { agent_id: 'child' });
+  assert.equal(store.agent(agent.id).status, 'needs-input');
+  assert.equal(hook('PostToolUseFailure', { tool_name: 'AskUserQuestion', tool_use_id: 'question', agent_id: 'child' }).attention, null);
+  assert.equal(store.agent(agent.id).status, 'working');
+});
+
+test('attention survives turn boundaries and is explicitly resolvable when no matching result exists', t => {
+  const store = storeProject(t);
+  const agent = store.register({ name: 'Claude', kind: 'claude' });
+  const hook = (name, fields = {}) => store.claudeHook(agent.id, event(name, fields));
+  hook('SessionStart');
+  hook('PermissionRequest', { tool_name: 'Bash' });
+  assert.equal(hook('Stop').attention, 'needs-permission');
+  assert.equal(hook('SessionEnd').attention, 'needs-permission');
+  assert.equal(store.agent(agent.id).status, 'disconnected');
+  assert.equal(hook('SessionStart', { session_id: 'replacement' }).attention, 'needs-permission');
+  const before = store.snapshot();
+  assert.throws(() => hook('Stop'), /inactive conversation/);
+  for (const name of ['PreToolUse', 'PostToolUse', 'PermissionRequest', 'SessionStart']) {
+    assert.throws(() => hook(name, { agent_id: 'old-child', tool_name: 'AskUserQuestion', tool_use_id: 'old-question' }), /inactive conversation/);
+  }
+  assert.deepEqual(store.snapshot(), before);
+  store.status(agent.id, 'working');
+  assert.equal(store.agent(agent.id).attention, null);
+  assert.equal(hook('Stop', { session_id: 'replacement', background_tasks: [{ status: 'running' }] }).status, 'idle');
+  assert.equal(hook('Stop', { session_id: 'replacement', session_crons: [{}] }).status, 'idle');
+  assert.equal(hook('StopFailure', { session_id: 'replacement' }).status, 'unknown');
+  store.status(agent.id, 'needs-input');
+  assert.equal(hook('PostToolUse', { session_id: 'replacement', tool_name: 'Read', tool_use_id: 'unrelated' }).attention, 'needs-input');
+});
+
+test('manual attention overrides automatic requests and invalid events never commit', t => {
+  const store = storeProject(t);
+  const agent = store.register({ name: 'Claude', kind: 'claude' });
+  store.claudeHook(agent.id, event('PreToolUse', { tool_name: 'AskUserQuestion', tool_use_id: 'question' }));
+  store.status(agent.id, 'needs-permission');
+  store.claudeHook(agent.id, event('PostToolUse', { tool_name: 'AskUserQuestion', tool_use_id: 'question' }));
+  assert.equal(store.agent(agent.id).attention, 'needs-permission');
+  const shell = store.register({ name: 'Shell', kind: 'shell' });
+  const before = store.snapshot();
+  for (const invalid of [null, {}, event('UnknownEvent'), event('Stop', { session_id: '' }), event('PreToolUse', { tool_name: 'Bash' }), event('Stop', { background_tasks: {} })]) {
+    assert.throws(() => store.claudeHook(agent.id, invalid));
+  }
+  assert.throws(() => store.claudeHook(shell.id, event('Stop')), /Claude agent/);
+  assert.deepEqual(store.snapshot(), before);
+});
+
+test('extension launches scoped hooks and keeps hidden-agent attention visible when focused', async t => {
+  const root = project();
+  const commands = new Map();
+  const errors = [];
+  const disposable = { dispose() {} };
+  const status = { show() {}, dispose() {} };
+  let provider;
+  const group = { viewColumn: 1, tabs: [] };
+  class UIValue { constructor(value) { this.value = value; } }
+  const vscode = {
+    EventEmitter: class {
+      constructor() { this.event = () => disposable; }
+      fire() {}
+      dispose() {}
+    },
+    ThemeColor: UIValue, ThemeIcon: UIValue, TreeItem: UIValue,
+    StatusBarAlignment: { Left: 1 },
+    workspace: {
+      isTrusted: true, workspaceFolders: [{ uri: { scheme: 'file', fsPath: root } }],
+      getConfiguration: () => ({ get: () => false })
+    },
+    commands: { registerCommand(name, callback) { commands.set(name, callback); return disposable; } },
+    window: {
+      terminals: [],
+      tabGroups: { all: [group], activeTabGroup: group, onDidChangeTabGroups: () => disposable, onDidChangeTabs: () => disposable },
+      createOutputChannel: () => ({ appendLine() {}, dispose() {} }),
+      createStatusBarItem: () => status,
+      registerTreeDataProvider(name, value) { provider = value; return disposable; },
+      onDidCloseTerminal: () => disposable,
+      showErrorMessage: message => errors.push(message),
+      createTerminal(options) {
+        const terminal = { name: options.name, options, show() { vscode.window.activeTerminal = terminal; } };
+        this.terminals.push(terminal);
+        return terminal;
+      }
+    }
+  };
+  const Module = require('node:module');
+  const load = Module._load;
+  let extension;
+  try {
+    Module._load = function (name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    extension = require('../src/extension');
+  } finally { Module._load = load; }
+  extension.activate({ subscriptions: [], extensionPath: path.resolve(__dirname, '..') });
+  t.after(async () => { await extension.deactivate(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = await commands.get('murmurplex.addTab')({ kind: 'claude', name: 'Claude' });
+  assert.ok(agent?.id, errors.join('\n'));
+  const terminal = vscode.window.terminals[0];
+  assert.equal(terminal.options.shellPath, 'claude');
+  assert.equal(terminal.options.shellArgs[0], '--settings');
+  const settings = JSON.parse(terminal.options.shellArgs[1]);
+  await commands.get('murmurplex.addTab')({ kind: 'shell', name: 'Other agent' });
+  assert.notEqual(vscode.window.activeTerminal, terminal);
+  const hook = async (name, fields = {}) => {
+    const result = await runHook(settings.hooks[name][0].hooks[0], { ...process.env, ...terminal.options.env }, event(name, fields));
+    assert.deepEqual(result, { code: 0, stdout: '', stderr: '' });
+  };
+  await hook('SessionStart');
+  await hook('PreToolUse', { tool_name: 'Bash', tool_use_id: 'approval' });
+  await hook('PermissionRequest', { tool_name: 'Bash' });
+  assert.match(status.text, /1 waiting/);
+  const item = provider.getTreeItem(provider.getChildren().find(item => item.id === agent.id));
+  assert.equal(item.description, 'needs-permission');
+  assert.equal(item.iconPath.value, 'circle-filled');
+  await commands.get('murmurplex.openAgent')(agent);
+  assert.equal(vscode.window.activeTerminal, terminal);
+  assert.match(status.text, /1 waiting/, 'focus must not resolve a request');
+  await hook('PostToolUse', { tool_name: 'Bash', tool_use_id: 'approval' });
+  assert.doesNotMatch(status.text, /waiting/);
+  assert.equal(provider.getChildren().find(item => item.id === agent.id).attention, null);
+  assert.equal(fs.existsSync(path.join(root, '.claude')), false, 'launch settings never overwrite project Claude configuration');
+  assert.deepEqual(errors, []);
+});

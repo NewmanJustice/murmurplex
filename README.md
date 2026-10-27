@@ -3,6 +3,7 @@
 A VS Code extension prototype for terminal agents working together on a persistent project, locally or in a devcontainer.
 
 See [SPECIFICATION.md](SPECIFICATION.md) for the agreed requirements, architecture, acceptance scenarios, and prototype implementation status.
+See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for proposed milestones, dependencies, and validation gates.
 
 Terminals share the available editor space evenly and rebalance when terminals or editor groups are added or removed. Each group can contain multiple agent tabs. One agent is designated coordinator; tasks, decisions, roles and mailbox messages survive restarting the extension.
 
@@ -62,6 +63,44 @@ Status values: `working`, `idle`, `needs-input`, `needs-permission`, `finished`,
 
 Reading an inbox does **not** acknowledge its messages. Acknowledgements persist. Mailbox delivery is pull-based in this prototype: agents need to check their inboxes, and messages never inject keystrokes into a terminal or automatically wake an agent.
 
+### Automatic Claude Code attention
+
+New Claude terminals launched by Murmurplex receive session-scoped [Claude Code hooks](https://code.claude.com/docs/en/hooks). They are supplied through `--settings`, alongside existing user/project settings; Murmurplex does not edit your Claude configuration or change permission decisions. Existing terminals need to be relaunched to receive the hooks. Codex and shell sessions still use manual/helper status reporting.
+
+| Claude event | Murmurplex behaviour |
+| --- | --- |
+| Session start | Records the conversation ID and reports unknown; preserves unresolved attention. |
+| Prompt submission or tool activity | Reports working without dismissing outstanding requests. |
+| `AskUserQuestion` tool call | Shows needs input until that call returns or fails. |
+| Tool permission request | Shows needs permission until all potentially matching tool calls return or fail. |
+| Main response stops | Reports finished unless attention remains; reports idle when background work or scheduled turns remain. Does not complete backlog tasks. |
+| API failure / session end | Reports unknown / disconnected, preserving unresolved attention. |
+
+Questions and permissions raised by Claude subagents appear on their parent Murmurplex agent. A subagent finishing or an unrelated tool returning cannot clear another outstanding request. Request tracking persists across service restarts. Hook payloads are reduced to event, conversation, subagent, and tool identifiers plus whether background work remains; prompts, answers, tool output, and transcripts are not stored or forwarded to the service.
+
+This first adapter does not detect questions written as ordinary response text or sandbox network approval dialogs. Denied/cancelled permissions may have no matching result event; those indicators intentionally remain until you explicitly resolve them with **Set Agent Attention State** or `murmurplex-agent status working` (also `idle` or `finished`). A new conversation does not automatically dismiss old requests. **Finished** means Claude reached a response boundary, not that the project is complete; another Stop hook may make Claude continue, and subsequent activity updates the state again.
+
+Hook errors are reported by the helper to Claude as non-blocking failures, never approvals. If hooks are disabled by your settings or managed policy, automatic reporting is unavailable: use manual reporting. The adapter was verified with Claude Code 2.1.311 and requires support for exec-form command hooks (`command` with `args`) and the events listed above.
+
+### Automatic Copilot CLI attention
+
+New Copilot terminals launched by Murmurplex load the bundled `copilot-plugin/` through `--plugin-dir`; your Copilot configuration is not edited. The plugin hooks call `murmurplex-agent copilot-hook`, which is on the terminal's `PATH`.
+
+| Copilot event | Murmurplex behaviour |
+|---|---|
+| `SessionStart` | Records the conversation; status `unknown`; preserves unresolved requests |
+| `UserPromptSubmit`, other tools | `working`, unless attention remains |
+| `ask_user` tool starts / finishes | `needs-input` / back to `working` when no other request remains |
+| `Stop` | `finished`, unless attention remains |
+| `ErrorOccurred` | An unrecoverable main-agent error reports `unknown`, preserving attention; recoverable errors do not change status |
+| `SessionEnd` | `disconnected`, preserving attention |
+
+Copilot permission prompts are **not** detected: the `permissionRequest` event fires for every permission check, including auto-approved ones, so it cannot show that you were asked. Set permission attention manually. Only event, conversation, subagent and tool identifiers and error recoverability are kept; prompts, error text and tool output are never forwarded. Verified with Copilot CLI 1.0.104.
+
+Question tracking survives restarts and resuming the same conversation. A replacement conversation cannot resolve the old conversation's requests: clear them explicitly with **Set Agent Attention State** or `murmurplex-agent status working` (also `idle` or `finished`). Both adapters reject events from an inactive conversation, including its subagents.
+
+Copilot hook reporting errors are written to stderr without a permission decision, and the helper exits successfully so a telemetry failure cannot deny a tool call. Ordinary mailbox/status commands still exit nonzero on errors. If hooks are disabled or reporting fails, use manual reporting.
+
 ### Persistence and devcontainers
 
 The workspace extension and service run in the project environment, including inside a devcontainer. One project service is active per development-host window in this prototype.
@@ -81,7 +120,7 @@ The service runs for the extension session. It stops when the extension deactiva
 - Native editor groups provide the layout. While Murmurplex is active, auto-balance affects the **whole current editor grid**, including groups containing source files. It does not close or replace their tabs. Use a dedicated window or set `murmurplex.autoBalance` to `false` if you want to arrange source editors independently.
 - The grid supports up to nine groups; additional agents can be tabs. VS Code's minimum pane sizes still apply. Odd group counts use different row heights to keep pane areas equal. Automatic removal of an empty group relies on VS Code's `workbench.editor.closeEmptyGroups` setting, enabled by default.
 - Coordinator styling in the Explorer agent list is live and authoritative. Native terminal star/title/icon styling reflects the role at terminal creation; switching the coordinator does not yet restyle existing native tabs or transfer a model's private conversation history.
-- Attention is supplied by the helper command or the manual status command. Automatic Claude/Codex/Copilot lifecycle hook installation and reliable question detection are not implemented yet.
+- Claude and Copilot terminals launched by Murmurplex have automatic lifecycle reporting for the events described above (Copilot permission prompts are manual). Other providers and unsupported prompts require the helper or manual status command. Native terminal tabs/groups do not yet have dynamic attention styling; the Explorer list and aggregate status-bar indicator remain authoritative.
 - Task assignment and coordinator selection are persistent records. Automated delegation, active coordinator handover, idle-agent wakeup, PR discovery, repository reconciliation, and merge controls are not implemented yet. The handover instructs agents to check repository state and request approval; this prototype does not enforce external Git actions.
 - Backlog and decisions are accessible through the helper and handover; a dedicated backlog UI and richer PR/worktree records are next steps.
 
@@ -93,7 +132,7 @@ npm run check
 npm run test:vscode
 ```
 
-The first command tests persistence, recovery, single-writer protection, corrupt-state handling, message acknowledgement, authentication, request limits and grid geometry. The second checks extension and service syntax.
+The first command tests persistence, recovery, single-writer protection, corrupt-state handling, message acknowledgement, authentication, request limits, grid geometry, Claude and Copilot hook reporting through the helper/service, and extension indicators. The second checks extension and service syntax.
 
 The VS Code integration test needs a graphical desktop and `code` on PATH (override with `VSCODE_CLI`). It launches an isolated temporary profile and project, checks real terminal tabs and groups, balanced pane sizes, persisted attention, and removal of a group while keeping its neighbour. It leaves its temporary logs for diagnosis and does not use your normal VS Code profile.
 
@@ -101,6 +140,8 @@ The VS Code integration test needs a graphical desktop and `code` on PATH (overr
 
 - `src/extension.js`: VS Code commands, native terminal groups, agent list and quiet attention indicator.
 - `src/layout.js`: equal-area grid geometry.
+- `src/claude.js`: launch-scoped Claude hook configuration and lifecycle/attention adapter.
+- `src/copilot.js` and `copilot-plugin/`: Copilot lifecycle/attention adapter and the bundled hook plugin.
 - `src/service.js`: authenticated loopback API, bound to the workspace extension lifecycle.
 - `src/store.js`: atomic persistent project state, roles, tasks, decisions and mailbox.
 - `bin/murmurplex-agent`: agent-facing mailbox and state helper.

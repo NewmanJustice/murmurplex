@@ -2,6 +2,8 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { claudeEvent } = require('../src/claude');
+const { copilotEvent } = require('../src/copilot');
 
 async function main() {
   const [command, ...args] = process.argv.slice(2);
@@ -16,6 +18,19 @@ async function main() {
   const agentId = process.env.MURMURPLEX_AGENT_ID;
   let endpoint, body;
   switch (command) {
+    case 'claude-hook':
+    case 'copilot-hook': {
+      const provider = command === 'claude-hook' ? 'Claude' : 'Copilot';
+      let payload = '';
+      for await (const chunk of process.stdin) {
+        payload += chunk;
+        if (Buffer.byteLength(payload) > 1024 * 1024) throw new Error(`${provider} hook input exceeds 1 MiB.`);
+      }
+      if (!agentId) throw new Error(`${provider} hook requires MURMURPLEX_AGENT_ID.`);
+      endpoint = `/hooks/${provider.toLowerCase()}`;
+      body = { agentId, event: (command === 'claude-hook' ? claudeEvent : copilotEvent)(JSON.parse(payload)) };
+      break;
+    }
     case 'state': endpoint = '/state'; break;
     case 'inbox': endpoint = `/inbox?agentId=${encodeURIComponent(agentId || '')}`; break;
     case 'send': endpoint = '/messages'; body = { from: agentId || 'user', to: args[0], body: args.slice(1).join(' ') }; break;
@@ -31,6 +46,11 @@ async function main() {
   });
   const value = await response.json();
   if (!response.ok) throw new Error(value.error);
-  console.log(JSON.stringify(value, null, 2));
+  if (!command.endsWith('-hook')) console.log(JSON.stringify(value, null, 2));
 }
-main().catch(error => { console.error(`Murmurplex: ${error.message}`); process.exitCode = 1; });
+main().catch(error => {
+  // Copilot denies tools when a PreToolUse command hook exits nonzero.
+  const reportingOnly = process.argv[2] === 'copilot-hook';
+  console.error(`Murmurplex: ${reportingOnly ? 'Copilot status reporting failed: ' : ''}${error.message}`);
+  process.exitCode = reportingOnly ? 0 : 1;
+});

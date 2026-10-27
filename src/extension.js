@@ -3,6 +3,7 @@ const vscode = require('vscode');
 const path = require('node:path');
 const { startService } = require('./service');
 const { gridLayout } = require('./layout');
+const { claudeSettings } = require('./claude');
 let active;
 
 function activate(context) {
@@ -100,7 +101,11 @@ function activate(context) {
     try {
       terminal = vscode.window.createTerminal({
         name: label, cwd: root, env: environment,
-        ...(kind !== 'shell' ? { shellPath: kind, shellArgs: [] } : {}),
+        ...(kind !== 'shell' ? {
+          shellPath: kind,
+          shellArgs: kind === 'claude' ? ['--settings', JSON.stringify(claudeSettings(path.join(context.extensionPath, 'bin', 'murmurplex-agent')))]
+            : kind === 'copilot' ? ['--plugin-dir', path.join(context.extensionPath, 'copilot-plugin')] : []
+        } : {}),
         iconPath: new vscode.ThemeIcon(coordinator ? 'star-full' : 'terminal'),
         ...(coordinator ? { color: new vscode.ThemeColor('terminal.ansiCyan') } : {}),
         location: { viewColumn: newGroup && !reuseEmpty ? groups.length + 1 : vscode.window.tabGroups.activeTabGroup.viewColumn },

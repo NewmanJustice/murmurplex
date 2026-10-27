@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "bash": "murmurplex-agent copilot-hook",
+        "powershell": "murmurplex-agent copilot-hook",
+        "timeoutSec": 6
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "bash": "murmurplex-agent copilot-hook",
+        "powershell": "murmurplex-agent copilot-hook",
+        "timeoutSec": 6
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "murmurplex-agent copilot-hook",
+        "powershell": "murmurplex-agent copilot-hook",
+        "timeoutSec": 6
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "bash": "murmurplex-agent copilot-hook",
+        "powershell": "murmurplex-agent copilot-hook",
+        "timeoutSec": 6
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "murmurplex-agent copilot-hook",
+        "powershell": "murmurplex-agent copilot-hook",
+        "timeoutSec": 6
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "murmurplex-agent copilot-hook",
+        "powershell": "murmurplex-agent copilot-hook",
+        "timeoutSec": 6
+      }
+    ],
+    "ErrorOccurred": [
+      {
+        "type": "command",
+        "bash": "murmurplex-agent copilot-hook",
+        "powershell": "murmurplex-agent copilot-hook",
+        "timeoutSec": 6
+      }
+    ],
+    "SessionEnd": [
+      {
+        "type": "command",
+        "bash": "murmurplex-agent copilot-hook",
+        "powershell": "murmurplex-agent copilot-hook",
+        "timeoutSec": 6
+      }
+    ]
+  }
+}

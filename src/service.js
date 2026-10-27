@@ -29,6 +29,8 @@ async function startService(directory, onChange = () => {}) {
       switch (url.pathname) {
         case '/agents': result = store.register(body); break;
         case '/status': result = store.status(body.agentId, body.status); break;
+        case '/hooks/claude': result = store.claudeHook(body.agentId, body.event); break;
+        case '/hooks/copilot': result = store.copilotHook(body.agentId, body.event); break;
         case '/coordinator': result = store.coordinator(body.agentId); break;
         case '/messages': result = store.send(body); break;
         case '/ack': result = store.acknowledge(body.agentId, body.messageId); break;

@@ -4,6 +4,7 @@ Status: agreed product direction, with an initial prototype implemented.
 Last updated: 27 October 2026.
 
 This document records the intended product. The implementation status below distinguishes the working prototype from remaining requirements. See [README.md](README.md) for setup and usage.
+See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the proposed delivery milestones and acceptance gates.
 
 ## 1. Purpose
 
@@ -81,7 +82,7 @@ The user can replace the coordinator during a session, including when changing a
 
 The outgoing coordinator relinquishes its role before the replacement begins assigning work. Other workers continue without losing their identities or mailboxes. A handover must not claim to transfer private conversation history that the new agent cannot access.
 
-Task-assignment authority and merge authority are separate settings. The initial default should require user approval for merges.
+Task-assignment authority and merge authority are separate settings. The initial default should require user approval for merges. The user can instead allow the coordinator to merge after review. In that mode, Murmurplex must still verify a completed review, passing required checks, and an unchanged head revision at merge time. Enforcement applies to Murmurplex's own operations; it cannot restrict Git commands an agent runs directly in its terminal.
 
 ## 6. Persistent project record
 
@@ -143,7 +144,7 @@ The prototype uses explicit mailbox commands and inbox polling. Automated delive
 | Layout | Native editor terminal groups, multiple tabs, equal-area balancing and automatic rebalancing. | Temporary maximise/restore workflow; finer separation from unrelated source-editor groups. |
 | Agents | Launch installed Claude, Codex, Copilot, or a shell. Reuse a saved agent identity and mailbox. | Provider-specific conversation resumption and lifecycle integration. |
 | Coordinator | Persistent coordinator selection; live visual distinction in Explorer. | Automated delegation, active handover, and updated styling on existing native terminal tabs. |
-| Attention | Helper/manual status updates; quiet Explorer and status-bar indicators; unresolved requests survive disconnection. | Automatic question, permission, and completion detection; indicators on hidden tabs and groups where supported. |
+| Attention | Launch-scoped Claude hooks for tool questions, tool permissions, and response/session boundaries; Copilot plugin hooks for `ask_user` and response/session boundaries; helper/manual fallback; quiet Explorer and status-bar indicators; unresolved requests survive disconnection. | Codex; Copilot permission prompts; unsupported Claude prompts and permission cancellation; indicators on hidden tabs and groups where supported. |
 | Persistence | Atomic file replacement; one writer; saved agents, tasks, decisions, messages, and coordinator role. | Richer backlog metadata, PR/worktree records, automatic reconciliation, and improved abnormal-crash recovery. |
 | Mailbox | Authenticated loopback API, agent helper, durable messages, explicit acknowledgement. | Task-linked messages, explicit delivery tracking, automatic delivery and idle-agent wakeup. |
 | PRs and merging | Handover instructions ask agents to verify state and obtain approval. | PR discovery, review tracking, merge actions, and enforced configurable merge authority. |
@@ -183,4 +184,4 @@ Replace the coordinator with another supported agent. The new coordinator receiv
 
 Rebuild a devcontainer with project state on persistent storage. Reopen the project and recover the coordination record without relying on surviving agent processes or private conversation history.
 
-These are product acceptance scenarios. The current automated tests cover a subset: layout geometry, live VS Code group/tab behaviour, persistence, mailbox acknowledgement, service authentication, invalid requests, and helper reconnection after service restart.
+These are product acceptance scenarios. The current automated tests cover a subset: layout geometry, live VS Code group/tab behaviour, persistence, mailbox acknowledgement, service authentication, invalid requests, helper reconnection after service restart, Claude hook-driven attention through the helper/service and extension indicators (including parallel tools and subagents), and Copilot hook-driven attention, resume correlation, error reporting and non-blocking reporting failures.
