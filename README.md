@@ -2,6 +2,8 @@
 
 A VS Code extension prototype for terminal agents working together on a persistent project, locally or in a devcontainer.
 
+See [SPECIFICATION.md](SPECIFICATION.md) for the agreed requirements, architecture, acceptance scenarios, and prototype implementation status.
+
 Terminals share the available editor space evenly and rebalance when terminals or editor groups are added or removed. Each group can contain multiple agent tabs. One agent is designated coordinator; tasks, decisions, roles and mailbox messages survive restarting the extension.
 
 ## Try the prototype
