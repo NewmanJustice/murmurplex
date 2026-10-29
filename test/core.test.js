@@ -51,6 +51,22 @@ test('project recovery preserves ownership, coordinator handover, attention and 
   assert.equal(store.snapshot().agents[1].attention, null);
 });
 
+test('task branch and worktree references persist, update and reject invalid values', t => {
+  const directory = temporary(t);
+  const store = new Store(directory);
+  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const task = store.task({ title: 'Implement feature', branch: 'feature/next', worktreePath: '/projects/feature' });
+  assert.equal(task.branch, 'feature/next');
+  assert.equal(task.worktreePath, '/projects/feature');
+  const updated = store.task({ id: task.id, title: task.title, status: 'in-progress' });
+  assert.equal(updated.branch, 'feature/next', 'omitted references are retained on update');
+  assert.equal(updated.worktreePath, '/projects/feature');
+  for (const invalid of [{ branch: '' }, { branch: 'bad\nbranch' }, { worktreePath: ' ' }, { worktreePath: 'bad\0path' }]) {
+    assert.throws(() => store.task({ id: task.id, title: task.title, ...invalid }));
+  }
+  assert.deepEqual(store.snapshot().tasks[0], updated);
+});
+
 test('single writer and validation failures preserve committed state', t => {
   const directory = temporary(t);
   const store = new Store(directory); t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -316,7 +332,9 @@ test('service authentication, mailbox, invalid requests and restart recovery', a
 
 test('CLI help documents queued delivery without requiring credentials', () => {
   const result = spawnSync(process.execPath, [path.join(__dirname, '../bin/murmurplex-agent'), 'help'], { encoding: 'utf8' });
-  assert.equal(result.status, 0); assert.match(result.stdout, /does not wake another agent/);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /does not wake another agent/);
+  assert.match(result.stdout, /task <title> \[status\] \[owner-id\] \[task-id\] \[branch\] \[worktree-path\] \[--clear-branch\]/);
 });
 
 test('agent helper reads refreshed credentials after a service restart and never needs a token in its environment', async t => {
@@ -327,6 +345,7 @@ test('agent helper reads refreshed credentials after a service restart and never
   let service = await startService(path.join(directory, '.murmurplex'), credentialsDirectory);
   t.after(async () => { if (service) await service.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const agent = service.store.register({ name: 'Restored worker', kind: 'shell' });
+  service.store.coordinator(agent.id);
   service.issueCredential(agent.id);
   const environment = { ...process.env, MURMURPLEX_AGENT_ID: agent.id, MURMURPLEX_CREDENTIALS: service.credentialFile(agent.id) };
   assert.equal(Object.keys(environment).some(key => /TOKEN/.test(key) && key.startsWith('MURMURPLEX')), false);
@@ -341,6 +360,15 @@ test('agent helper reads refreshed credentials after a service restart and never
   assert.equal(JSON.parse(received.stdout)[0].id, message.id);
   await execFile(process.execPath, [helper, 'status', 'needs-input'], { env: environment });
   assert.equal(service.store.agent(agent.id).attention, 'needs-input');
+  const taskResult = await execFile(process.execPath, [helper, 'task', 'Tracked work', 'in-progress', '-', '-', 'null', 'null'], { env: environment });
+  const task = JSON.parse(taskResult.stdout);
+  assert.equal(task.branch, 'null', 'literal null is accepted as a branch name');
+  assert.equal(task.worktreePath, 'null', 'literal null is accepted as a worktree path');
+  const taskUpdate = await execFile(process.execPath, [helper, 'task', 'Tracked work', 'review', '-', task.id], { env: environment });
+  assert.equal(JSON.parse(taskUpdate.stdout).branch, 'null', 'omitted task references survive CLI updates');
+  const taskClear = await execFile(process.execPath, [helper, 'task', 'Tracked work', 'review', '-', task.id, '-', '-', '--clear-branch', '--clear-worktree'], { env: environment });
+  assert.equal(JSON.parse(taskClear.stdout).branch, null);
+  assert.equal(JSON.parse(taskClear.stdout).worktreePath, null);
   await execFile(process.execPath, [helper, 'ack', message.id], { env: environment });
   assert.equal(service.store.inbox(agent.id).length, 0);
   service.revokeCredential(agent.id);

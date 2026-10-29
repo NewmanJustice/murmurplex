@@ -8,7 +8,7 @@ const { gridLayout } = require('./layout');
 const { claudeSettings } = require('./claude');
 const { codexConfigArgs } = require('./codex');
 const { codexHookTrust } = require('./codex-trust');
-const { inspectRepository } = require('./repository');
+const { inspectRepository, reconcileTaskReferences } = require('./repository');
 const { redact, authenticationEnvironment } = require('./security');
 let active;
 
@@ -17,12 +17,19 @@ function activate(context) {
   const terminals = new Map();
   const output = vscode.window.createOutputChannel('Murmurplex');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  let service, root, starting, balancing = false, timer, enabled = false, disposed = false, maximized, viewer, viewerWatch, viewerTimer, repositoryState, repositoryRefresh = 0;
+  let service, root, starting, balancing = false, timer, enabled = false, disposed = false, maximized, viewer, viewerWatch, viewerTimer, repositoryState, repositoryObservation, repositoryRefresh = 0;
   const state = () => service?.store.snapshot() || viewer?.snapshot();
   const refresh = () => {
     change.fire();
     const snapshot = state();
     if (!snapshot) return;
+    if (repositoryState && !repositoryState.loading) {
+      repositoryState = {
+        ...repositoryState,
+        taskReferences: reconcileTaskReferences(snapshot.tasks, repositoryObservation)
+      };
+      repositoryChange.fire();
+    }
     const waiting = snapshot.agents.filter(a => a.attention).length;
     status.text = viewer ? `$(eye) Murmurplex · read-only${waiting ? ` · ${waiting} waiting` : ''}` : waiting ? `$(circle-filled) Murmurplex · ${waiting} waiting` : '$(terminal) Murmurplex';
     status.color = waiting ? new vscode.ThemeColor('notificationsWarningIcon.foreground') : undefined;
@@ -50,7 +57,20 @@ function activate(context) {
       if (element) return element.children || [];
       if (!repositoryState) return [{ label: 'Start or Resume Project to inspect Git state.', command: 'murmurplex.start' }];
       if (repositoryState.loading) return [{ label: 'Inspecting repository…' }];
-      if (repositoryState.error) return [{ label: 'Git state could not be inspected', description: repositoryState.error }];
+      const taskReferences = repositoryState.taskReferences || [];
+      const referenceGroup = {
+        label: 'Saved task references',
+        description: String(taskReferences.length),
+        children: taskReferences.length ? taskReferences.map(reference => ({
+          label: reference.title,
+          description: reference.status.toUpperCase(),
+          tooltip: [reference.branch && `branch ${reference.branch}`, reference.worktreePath && `worktree ${reference.worktreePath}`].filter(Boolean).join('\n')
+        })) : [{ label: 'No task branch or worktree references saved.' }]
+      };
+      if (repositoryState.error) return [
+        { label: 'Git state could not be inspected', description: repositoryState.error },
+        referenceGroup
+      ];
       const observed = repositoryState;
       const children = [
         observed.changes.length
@@ -65,12 +85,14 @@ function activate(context) {
         { label: 'Repository root', description: observed.root },
         { label: 'Branch', description: observed.branch || 'detached HEAD' },
         { label: 'HEAD', description: observed.head || '(no commits)' },
-        ...children
+        ...children,
+        referenceGroup
       ];
     },
     getTreeItem(element) {
       const item = new vscode.TreeItem(element.label, element.children ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
       item.description = element.description;
+      item.tooltip = element.tooltip || element.description;
       if (element.command) item.command = { command: element.command, title: 'Start or Resume Project' };
       return item;
     }
@@ -86,11 +108,16 @@ function activate(context) {
     try {
       const observed = await inspectRepository(root);
       if (refreshId !== repositoryRefresh) return;
-      repositoryState = observed;
+      repositoryObservation = observed;
+      repositoryState = { ...observed, taskReferences: reconcileTaskReferences(state()?.tasks || [], repositoryObservation) };
     }
     catch (error) {
       if (refreshId !== repositoryRefresh) return;
-      repositoryState = { error: redact(error.message) };
+      repositoryObservation = undefined;
+      repositoryState = {
+        error: redact(error.message),
+        taskReferences: reconcileTaskReferences(state()?.tasks || [], null)
+      };
       output.appendLine(`Repository inspection failed: ${repositoryState.error}`);
       if (notify) vscode.window.showErrorMessage(`Murmurplex could not inspect Git state: ${repositoryState.error}`);
     }

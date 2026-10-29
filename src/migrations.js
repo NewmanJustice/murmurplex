@@ -3,7 +3,7 @@ const KINDS = ['claude', 'codex', 'copilot', 'shell'];
 const PROVIDERS = ['claude', 'codex', 'copilot'];
 const ATTENTION = [null, 'needs-input', 'needs-permission'];
 const COLLECTIONS = ['agents', 'tasks', 'messages', 'decisions'];
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 3;
 
 const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
 
@@ -24,6 +24,13 @@ const MIGRATIONS = {
         if (provider !== 'copilot' && !Array.isArray(lifecycle.tools)) lifecycle.tools = [];
       }
     }
+  },
+  2(state) {
+    for (const task of state.tasks) {
+      if (!isObject(task)) continue;
+      if (task.branch === undefined) task.branch = null;
+      if (task.worktreePath === undefined) task.worktreePath = null;
+    }
   }
 };
 
@@ -36,6 +43,15 @@ function validate(state, states) {
     if (!isObject(agent) || typeof agent.id !== 'string' || !agent.id || ids.has(agent.id)) throw new Error('Project state has an invalid or duplicate agent.');
     ids.add(agent.id);
     if (typeof agent.name !== 'string' || !KINDS.includes(agent.kind) || !states.has(agent.status) || !ATTENTION.includes(agent.attention ?? null)) throw new Error(`Project state agent ${agent.id} is invalid.`);
+  }
+  for (const task of state.tasks) {
+    if (!isObject(task) || typeof task.id !== 'string' || !task.id) throw new Error('Project state has an invalid task.');
+    if (task.branch !== null && (typeof task.branch !== 'string' || !task.branch.trim() || task.branch !== task.branch.trim() || task.branch.length > 255 || /[\u0000-\u001f]/.test(task.branch))) {
+      throw new Error(`Project state task ${task.id} has an invalid branch reference.`);
+    }
+    if (task.worktreePath !== null && (typeof task.worktreePath !== 'string' || !task.worktreePath.trim() || task.worktreePath.length > 4096 || /[\u0000-\u001f]/.test(task.worktreePath))) {
+      throw new Error(`Project state task ${task.id} has an invalid worktree path.`);
+    }
   }
   if (state.coordinatorId !== null && !ids.has(state.coordinatorId)) throw new Error('Project state coordinator is not a known agent.');
 }

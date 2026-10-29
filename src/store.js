@@ -242,9 +242,20 @@ class Store {
     if (!TASK_STATES.has(status)) throw new Error('Invalid task status.');
     if (input.ownerId) this.agent(input.ownerId);
     if (input.id && !this.state.tasks.some(t => t.id === input.id)) throw new Error('Unknown task.');
+    const existing = input.id && this.state.tasks.find(task => task.id === input.id);
+    const reference = (key, name, max) => {
+      const value = input[key] === undefined ? existing?.[key] ?? null : input[key];
+      return value === null ? null : text(value, name, max);
+    };
+    const branch = reference('branch', 'branch', 255);
+    const worktreePath = reference('worktreePath', 'worktreePath', 4096);
+    if (branch !== null && branch !== branch.trim()) throw new Error('branch cannot have leading or trailing whitespace.');
+    for (const [name, value] of [['branch', branch], ['worktreePath', worktreePath]]) {
+      if (value !== null && /[\u0000-\u001f]/.test(value)) throw new Error(`${name} contains invalid control characters.`);
+    }
     return this.update(next => {
       const task = input.id ? next.tasks.find(t => t.id === input.id) : { id: randomUUID() };
-      Object.assign(task, { title: input.title, status, ownerId: input.ownerId || null, updatedAt: new Date().toISOString() });
+      Object.assign(task, { title: input.title, status, ownerId: input.ownerId || null, branch, worktreePath, updatedAt: new Date().toISOString() });
       if (!input.id) next.tasks.push(task);
       return task;
     });

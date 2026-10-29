@@ -48,6 +48,20 @@ test('a version 1 project is migrated, backed up once, and keeps its records', t
   assert.equal(fs.readFileSync(`${file}.v1.bak`, 'utf8'), raw, 'the backup is not overwritten');
 });
 
+test('version 2 tasks gain optional branch and worktree references during migration', t => {
+  const legacy = { ...v1({ version: 2, tasks: [{ id: 'task-1', title: 'Review', status: 'review', ownerId: 'a' }] }) };
+  const { root, file, raw } = project(t, legacy);
+  const store = new Store(root);
+  const state = store.snapshot();
+  store.close();
+  assert.equal(state.version, CURRENT_VERSION);
+  assert.deepEqual(state.tasks[0], {
+    id: 'task-1', title: 'Review', status: 'review', ownerId: 'a', branch: null, worktreePath: null
+  });
+  assert.equal(fs.readFileSync(`${file}.v2.bak`, 'utf8'), raw);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, CURRENT_VERSION);
+});
+
 test('new projects start at the current version without a backup', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'murmurplex-migrate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -69,6 +83,8 @@ test('newer, malformed or inconsistent state is refused and left untouched', t =
     'unknown status': v1({ agents: [{ ...v1().agents[0], status: 'sleeping' }] }),
     'bad attention': v1({ agents: [{ ...v1().agents[0], attention: 'angry' }] }),
     'unknown coordinator': v1({ coordinatorId: 'missing' }),
+    'invalid task branch': v1({ tasks: [{ id: 'task', branch: 'bad\nbranch', worktreePath: null }] }),
+    'missing task reference fields': v1({ version: CURRENT_VERSION, tasks: [{ id: 'task' }] }),
     'not an object': '[]'
   };
   for (const [name, state] of Object.entries(cases)) {

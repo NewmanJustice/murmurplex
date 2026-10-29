@@ -1,5 +1,6 @@
 'use strict';
 const { execFile } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const git = (root, args) => new Promise((resolve, reject) => {
@@ -72,13 +73,16 @@ function parseWorktrees(output) {
 
 async function inspectRepository(root) {
   const statusText = await git(root, ['status', '--porcelain=v2', '--branch', '--untracked-files=all', '-z']);
-  const [repositoryRoot, worktreeText] = await Promise.all([
+  const [repositoryRoot, worktreeText, branchText] = await Promise.all([
     git(root, ['rev-parse', '--show-toplevel']),
-    git(root, ['worktree', 'list', '--porcelain', '-z'])
+    git(root, ['worktree', 'list', '--porcelain', '-z']),
+    git(root, ['for-each-ref', '--format=%(refname)', 'refs/heads'])
   ]);
   return {
     root: repositoryRoot.trim(),
+    projectRoot: path.resolve(root),
     ...parseStatus(statusText),
+    branches: branchText.split(/\r?\n/).filter(Boolean).map(branch => branch.replace(/^refs\/heads\//, '')),
     worktrees: parseWorktrees(worktreeText).map(worktree => ({
       ...worktree,
       current: path.resolve(worktree.path) === path.resolve(repositoryRoot.trim())
@@ -86,4 +90,29 @@ async function inspectRepository(root) {
   };
 }
 
-module.exports = { inspectRepository, parseStatus, parseWorktrees };
+function samePath(left, right) {
+  const realPath = value => {
+    try { return fs.realpathSync(value); }
+    catch { return path.resolve(value); }
+  };
+  const resolvedLeft = realPath(left);
+  const resolvedRight = realPath(right);
+  return process.platform === 'win32'
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+function reconcileTaskReferences(tasks, repository) {
+  return tasks.filter(task => task.branch || task.worktreePath).map(task => {
+    const reference = { id: task.id, title: task.title, branch: task.branch, worktreePath: task.worktreePath };
+    if (!repository) return { ...reference, status: 'unverified' };
+    const worktree = task.worktreePath && repository.worktrees.find(entry =>
+      samePath(path.resolve(repository.projectRoot || repository.root, task.worktreePath), entry.path));
+    if (task.worktreePath && !worktree) return { ...reference, status: 'stale' };
+    if (task.branch && !repository.branches.includes(task.branch)) return { ...reference, status: 'stale' };
+    if (task.branch && worktree && worktree.branch !== task.branch) return { ...reference, status: 'conflict' };
+    return { ...reference, status: 'present' };
+  });
+}
+
+module.exports = { inspectRepository, parseStatus, parseWorktrees, reconcileTaskReferences };

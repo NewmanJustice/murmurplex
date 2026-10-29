@@ -14,14 +14,14 @@ be used today.
 | --- | --- | --- |
 | Terminal workspace | Native editor groups, agent tabs, automatic grid balancing, maximise/restore, tenth-agent-as-tab, read-only second-window view, passing graphical validation for one to nine groups. | Isolation from source-editor groups and tab-level indicators (no VS Code API); devcontainer settle timing. |
 | Lifecycle and attention | Claude, Codex and Copilot hook adapters, persistent requests, quiet Explorer/status-bar indicators, manual fallback. | Copilot permission prompts, Codex questions, unsupported Claude prompts, tab/group indicators. |
-| Project record | Atomic writes, single writer, agents, coordinator identity, basic tasks, decisions, mailbox, versioned schema with tested migrations/backups, explicit stale-lock recovery, interrupted-write coverage and initial compaction. Read-only Git observations show branch, `HEAD`, working-tree changes and worktrees on startup. | Persisted Git references and comparison with current observations, richer records, archival/completed-task retention, devcontainer recovery; crashed operation guards still require offline manual removal. No power-loss durability guarantee. |
+| Project record | Atomic writes, single writer, agents, coordinator identity, basic tasks, decisions, mailbox, versioned schema with tested migrations/backups, explicit stale-lock recovery, interrupted-write coverage and initial compaction. Read-only Git observations show branch, `HEAD`, working-tree changes and worktrees on startup; task branch/worktree references are persisted and compared locally. | Richer records, persisted PR references, remote-branch/PR reconciliation, archival/completed-task retention, devcontainer recovery; crashed operation guards still require offline manual removal. No power-loss durability guarantee. |
 | Coordination | Saved coordinator selection, recipient-filtered copyable handover, per-agent credentials and enforced coordinator/worker permissions. | Configurable assignment authority, interruption-safe active handover, delivery tracking, automatic delivery and wakeup. |
 | PR workflow | Handover text asks agents to verify state and get approval. | PR/review tracking, controlled merging, approval UI. |
 | Engineering | Node tests, syntax check, graphical test script, GitHub Actions CI (Node 20/22, Xvfb VS Code test). | No packaging, no compatibility testing against provider CLI versions. |
 
 Validation as of 29 October 2026 (observations, not guarantees):
 
-- All 43 Node tests, syntax checks, working-file secret scanning and the scanner
+- All 48 Node tests, syntax checks, working-file secret scanning and the scanner
   integration test passed locally.
 - The expanded graphical test passed locally, including one-to-nine-group
   layout coverage, tenth-agent tab fallback, maximise/restore and read-only
@@ -115,8 +115,8 @@ These are small and time-boxed. They change later designs, so decide them first.
    scoped (for example, skipped when source editors are open). Revisit a
    webview or pseudoterminal design only if hidden-tab indicators become a
    release requirement. Owner accepted native groups on 2026-10-28.
-4. **State schema versioning and migrations (done).** State is version 2.
-   Version 1 migrates in memory with validation and a one-time original-file
+4. **State schema versioning and migrations (done).** State is version 3.
+   Versions 1 and 2 migrate in memory with validation and a one-time original-file
    backup before writing. Newer or invalid state is refused untouched. Tests
    cover migration, backups and refusal; future state-shape changes require a
    new migration and version bump.
@@ -260,16 +260,19 @@ Acceptance:
 - A devcontainer rebuild with persistent state recovers the record without
   surviving agent processes or old credentials.
 
-Status: schema version 2 and migration backups, explicit stale-lock recovery,
+Status: schema version 3 and migration backups, explicit stale-lock recovery,
 writer-ownership checks, interrupted-write cleanup and initial compaction are
 implemented and tested. Each write retains the newest 500 acknowledged messages
 and 500 decisions, without archival; unacknowledged messages are preserved and
 completed tasks are not compacted. Startup now reads branch, `HEAD`,
 working-tree changes and worktrees into a separate Explorer view without
 writing Git or Murmurplex state; observations are refreshed manually after
-Git changes and failures remain explicitly unverified. Persisted Git references,
-comparison with recovered task records, devcontainer rebuild validation and a
-fuller retention policy remain. A crash inside a guarded writer operation
+Git or task-reference changes and failures remain explicitly unverified.
+Optional branch/worktree references persist on tasks and are compared with
+local branch/worktree observations as present, stale, conflicting or
+unverified; no automatic repair occurs. Remote-branch/PR reconciliation,
+devcontainer rebuild validation and a fuller retention policy remain. A crash
+inside a guarded writer operation
 requires offline manual removal of `writer-operation.lock` after stopping all
 project services. File data is synced before rename, but directory entries are
 not; power-loss durability is not guaranteed.
@@ -404,15 +407,18 @@ Consequences:
 
 ## Next step
 
-The first repository-recovery increment is implemented: startup reads the
-current branch, HEAD, working-tree changes and worktrees into a separate
-read-only Explorer view. It neither changes Git/project state nor infers that
-saved work is still running or complete; failed inspection is explicit.
+The first two repository-recovery increments are implemented: startup reads
+the current branch, HEAD, working-tree changes and worktrees into a separate
+read-only Explorer view; persisted task branch/worktree references are compared
+against local branches and worktrees. Missing references are marked stale,
+branch/worktree disagreement is marked conflicting, and unavailable Git state
+is unverified. Nothing is automatically repaired and saved task status does
+not imply work is still running or complete. PR state remains unverified until
+milestone 5.
 
-Recommended next increment: persist branch/worktree references with relevant
-project records, then compare them with these live observations on reopen.
-Preserve history and surface stale or conflicting references without automatic
-repair. PR state remains unverified until milestone 5.
+Recommended next increment: enrich task records with priorities, acceptance
+criteria, dependencies, progress and blocker validation, then address local
+branch changes made outside Murmurplex without destructive repair.
 
 Other open v0.1 gates are richer task/recovery records, the remaining retention
 policy, interactive provider validation, devcontainer layout/rebuild recovery,

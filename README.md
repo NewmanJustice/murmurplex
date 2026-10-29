@@ -45,7 +45,7 @@ code --new-window --extensionDevelopmentPath=/absolute/path/to/murmurplex /absol
 
 All command names begin with **Murmurplex:** in VS Code.
 
-When a project starts or resumes, the **Repository** Explorer view shows a read-only observation of its current Git branch, `HEAD`, working-tree changes and worktrees alongside the saved Murmurplex project record. Refresh it with **Murmurplex: Refresh Repository State** after Git state changes. Failed Git inspection is shown explicitly as unverified. These observations are not persisted, do not reconcile or repair saved records, and do not imply that prior agent work is still running or complete.
+When a project starts or resumes, the **Repository** Explorer view shows a read-only observation of its current Git branch, `HEAD`, working-tree changes and worktrees alongside the saved Murmurplex project record. Refresh it with **Murmurplex: Refresh Repository State** after Git or task-reference changes. Saved task branch/worktree references are compared with local branches and worktrees and marked `PRESENT`, `STALE`, `CONFLICT` or `UNVERIFIED`; Git observations are transient and no reconciliation changes are written. A reference being present does not imply that prior agent work is still running or complete. PR state remains unverified.
 
 ### Mailbox and project record
 
@@ -59,10 +59,11 @@ murmurplex-agent ack MESSAGE_ID
 murmurplex-agent status needs-permission
 murmurplex-agent status working
 murmurplex-agent task 'Review login changes' review OWNER_ID
+murmurplex-agent task 'Implement feature' in-progress OWNER_ID - feature/next /projects/feature
 murmurplex-agent decision 'User approval is required before merging.'
 ```
 
-`state` lists agent and task IDs. `task` accepts a title, optional status, optional owner ID, and optional existing task ID. Only the coordinator can create or assign tasks and record decisions. Workers can update the title/status of their own assigned tasks using the existing task ID, but cannot change ownership. For coordinator updates, provide title, status and owner because omitted status/owner reset to their defaults. Valid task states: `backlog`, `in-progress`, `blocked`, `review`, `done`.
+`state` lists agent and task IDs. `task` accepts a title, optional status, owner ID, existing task ID, branch and worktree path in that order; use `-` to leave a positional value unspecified. Append `--clear-branch` or `--clear-worktree` to clear a reference, or `--branch=VALUE` and `--worktree=VALUE` to set one explicitly; these forms allow literal values such as `null` and `-`. Worktree paths can be absolute or relative to the project root. References persist with the task; omitted references on task updates are retained. Only the coordinator can create or assign tasks and record decisions. Workers can update the title/status/references of their own assigned tasks using the existing task ID, but cannot change ownership. For coordinator updates, provide title, status and owner because omitted status/owner reset to their defaults. Valid task states: `backlog`, `in-progress`, `blocked`, `review`, `done`.
 
 Status values: `working`, `idle`, `needs-input`, `needs-permission`, `finished`, `disconnected`, `unknown`. `working`, `idle`, and `finished` resolve attention; disconnecting or focusing a terminal does not.
 
@@ -157,7 +158,7 @@ Project state is written through an atomic file replacement to `.murmurplex/stat
 
 Each write keeps the newest 500 acknowledged messages and 500 decisions; older ones are discarded without an archive. Unacknowledged messages are never discarded.
 
-State is versioned (currently 2). Opening an older project migrates it in memory, validates it, and keeps the original as `state.json.v<N>.bak` (written once, never overwritten) before the first write. State written by a newer Murmurplex, or state that fails validation, is refused and left untouched; there are no downgrades. Migrations live in `src/migrations.js`.
+State is versioned (currently 3). Opening an older project migrates it in memory, validates it, and keeps the original as `state.json.v<N>.bak` (written once, never overwritten) before the first write. State written by a newer Murmurplex, or state that fails validation, is refused and left untouched; there are no downgrades. Migrations live in `src/migrations.js`.
 
 The project directory must be on a persistent bind mount or volume if it is to survive container rebuilds. Back up `.murmurplex/state.json` alongside other important local project data. The included devcontainer mounts the source workspace using the standard Dev Containers workspace mount.
 

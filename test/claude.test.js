@@ -160,7 +160,10 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   const status = { show() {}, dispose() {} };
   let provider;
   let repositoryProvider;
-  let inspect = repository.inspectRepository;
+  let inspect = async () => ({
+    root, branch: 'main', head: 'head', branches: ['main'], changes: [],
+    worktrees: [{ path: root, branch: 'main', current: true }]
+  });
   let selectedAgent;
   let handover;
   let inheritAuthentication = false;
@@ -212,7 +215,10 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   try {
     Module._load = function (name, ...args) {
       if (name === 'vscode') return vscode;
-      if (name === './repository') return { inspectRepository: (...inspectArgs) => inspect(...inspectArgs) };
+      if (name === './repository') return {
+        inspectRepository: (...inspectArgs) => inspect(...inspectArgs),
+        reconcileTaskReferences: repository.reconcileTaskReferences
+      };
       return load.call(this, name, ...args);
     };
     extension = require('../src/extension');
@@ -225,7 +231,9 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
     fs.rmSync(storage, { recursive: true, force: true });
   });
   const directory = path.join(root, '.murmurplex');
-  fs.mkdirSync(directory);
+  const seed = new Store(directory);
+  seed.task({ title: 'Tracked feature', status: 'in-progress', branch: 'main', worktreePath: root });
+  seed.close();
   const lock = path.join(directory, 'writer.lock');
   fs.writeFileSync(lock, '1234\n');
   await commands.get('murmurplex.recoverLock')();
@@ -282,6 +290,15 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   await hook('UserPromptSubmit');
   assert.equal(provider.getChildren().find(item => item.id === agent.id).status, 'working');
   const credential = JSON.parse(fs.readFileSync(credentialFile, 'utf8'));
+  const taskResponse = await fetch(credential.url + '/tasks', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${credential.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Tracked feature', status: 'in-progress', ownerId: agent.id, branch: 'main', worktreePath: root })
+  });
+  assert.equal(taskResponse.status, 200);
+  const references = repositoryProvider.getChildren().find(item => item.label === 'Saved task references');
+  assert.equal(repositoryProvider.getChildren(references)[0].description, 'PRESENT', 'task changes refresh the saved-reference view without rerunning Git');
+  assert.equal(repositoryProvider.getChildren(references)[0].tooltip, `branch main\nworktree ${root}`);
   const post = (body) => fetch(credential.url + '/messages', {
     method: 'POST', headers: { Authorization: `Bearer ${credential.token}` }, body: JSON.stringify(body)
   });
