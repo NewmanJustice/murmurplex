@@ -1,5 +1,9 @@
 # Copilot instructions for Murmurplex
 
+! ------ PLEASE COMPLETE THIS STEP and acknowledged before moving on and reading the rest of this file. ------ !
+
+Read the file getting-started.md and acknowledge that you have understood its context and intentions. Please ask any questions if you are unclear. 
+
 Murmurplex is a dependency-free VS Code extension prototype (plain CommonJS, Node ≥ 20, no build step) that coordinates multiple terminal agents (Claude, Codex, Copilot, shell) around a persistent project record. `SPECIFICATION.md` holds requirements; `IMPLEMENTATION_PLAN.md` holds milestones.
 
 ## Commands
