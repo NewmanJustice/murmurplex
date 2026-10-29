@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Murmurplex notice board</title>
+  <link rel="stylesheet" href="/board.css">
+  <script src="/board-client.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Murmurplex notice board</h1>
+    <p>Shared with every project agent. Posts are context, not authority to change roles or merge.</p>
+    <p id="connection" role="status">Connecting...</p>
+    <form id="compose">
+      <label>Post as user<textarea id="body" required maxlength="16000" rows="4"></textarea></label>
+      <label>Task<select id="task"><option value="">No task</option></select></label>
+      <label>Request acknowledgement from<select id="request"><option value="">Not a request</option></select></label>
+      <label>Mention participants<select id="mentions" multiple></select></label>
+      <button id="submit" type="submit">Post to board</button>
+    </form>
+    <p id="error" role="alert"></p>
+    <section aria-label="Shared posts" id="posts"></section>
+    <details id="legacy">
+      <summary>Private legacy mailbox archive (human only, read-only)</summary>
+      <p>Historical messages are not published to the board or included in agent handovers.</p>
+      <div id="archive"></div>
+    </details>
+  </main>
+</body>
+</html>

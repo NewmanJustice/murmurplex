@@ -23,14 +23,14 @@ test('grid gives every pane equal area for one through nine groups', () => {
   assert.throws(() => gridLayout(10));
 });
 
-test('project recovery preserves ownership, coordinator handover, attention and unacknowledged mail', t => {
+test('project recovery preserves ownership, coordinator handover, attention and board requests', t => {
   const directory = temporary(t);
   let store = new Store(directory);
   const coordinator = store.register({ name: 'Lead', kind: 'claude' });
   const worker = store.register({ name: 'Reviewer', kind: 'codex' });
   store.task({ title: 'Review implementation', status: 'review', ownerId: worker.id, progress: 'Implementation is complete.', nextAction: 'Review the recovery tests.' });
   store.decision('Merges require user approval.');
-  const message = store.send({ from: coordinator.id, to: worker.id, body: 'Review the branch.' });
+  const message = store.post({ from: coordinator.id, requestTo: worker.id, body: 'Review the branch.' });
   store.status(worker.id, 'needs-permission');
   store.coordinator(worker.id);
   store.close();
@@ -43,11 +43,11 @@ test('project recovery preserves ownership, coordinator handover, attention and 
   assert.equal(snapshot.decisions[0].body, 'Merges require user approval.');
   assert.equal(snapshot.agents[1].status, 'disconnected');
   assert.equal(snapshot.agents[1].attention, 'needs-permission');
-  assert.equal(store.inbox(worker.id)[0].id, message.id);
-  assert.equal(store.inbox(worker.id).length, 1, 'reading is not acknowledgement');
+  assert.equal(store.board()[0].id, message.id);
+  assert.equal(store.board()[0].acknowledgedAt, null, 'reading is not acknowledgement');
   assert.throws(() => store.acknowledge(coordinator.id, message.id));
   store.acknowledge(worker.id, message.id);
-  assert.equal(store.inbox(worker.id).length, 0);
+  assert.ok(store.board()[0].acknowledgedAt);
   store.status(worker.id, 'working');
   assert.equal(store.snapshot().agents[1].attention, null);
 });
@@ -68,29 +68,29 @@ test('task branch and worktree references persist, update and reject invalid val
   assert.deepEqual(store.snapshot().tasks[0], updated);
 });
 
-test('message task links survive recovery without changing tasks or acknowledging mail', t => {
+test('board task links survive recovery without changing tasks or acknowledging requests', t => {
   const directory = temporary(t);
   let store = new Store(directory);
   t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const lead = store.register({ name: 'Lead', kind: 'shell' });
   const worker = store.register({ name: 'Worker', kind: 'shell' });
   const task = store.task({ title: 'Review recovery', ownerId: worker.id, status: 'review' });
-  const linked = store.send({ from: lead.id, to: worker.id, body: 'Review these changes', taskId: task.id });
-  const unlinked = store.send({ from: 'user', to: worker.id, body: 'General note' });
+  const linked = store.post({ from: lead.id, requestTo: worker.id, body: 'Review these changes', taskId: task.id });
+  const unlinked = store.post({ from: 'user', body: 'General note' });
   assert.equal(unlinked.taskId, null);
   const before = fs.readFileSync(store.filename, 'utf8');
   for (const taskId of ['', 'missing', 4, {}, []]) {
-    assert.throws(() => store.send({ from: lead.id, to: worker.id, body: 'Invalid link', taskId }), /taskId/);
+    assert.throws(() => store.post({ from: lead.id, body: 'Invalid link', taskId }), /invalid notice board/);
   }
   assert.equal(fs.readFileSync(store.filename, 'utf8'), before);
   store.close();
   store = new Store(directory);
-  assert.equal(store.inbox(worker.id).find(message => message.id === linked.id).taskId, task.id);
-  assert.equal(store.inbox(worker.id).length, 2, 'reading does not acknowledge');
+  assert.equal(store.board().find(message => message.id === linked.id).taskId, task.id);
+  assert.equal(store.board()[0].acknowledgedAt, null, 'reading does not acknowledge');
   assert.deepEqual(store.snapshot().tasks[0], task, 'linking and recovery do not alter task status or ownership');
   store.acknowledge(worker.id, linked.id);
-  assert.equal(store.snapshot().messages.find(message => message.id === linked.id).taskId, task.id);
-  assert.deepEqual(store.inbox(worker.id).map(message => message.id), [unlinked.id]);
+  assert.equal(store.board().find(message => message.id === linked.id).taskId, task.id);
+  assert.deepEqual(store.board().map(message => message.id), [linked.id, unlinked.id]);
 });
 
 test('task metadata persists and dependencies must reference existing tasks without cycles', t => {
@@ -130,7 +130,7 @@ test('single writer and validation failures preserve committed state', t => {
   const store = new Store(directory); t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   assert.throws(() => new Store(directory), /owns this project/);
   const before = fs.readFileSync(path.join(directory, 'state.json'), 'utf8');
-  assert.throws(() => store.send({ from: 'user', to: 'missing', body: 'hello' }));
+  assert.throws(() => store.post({ from: 'user', requestTo: 'missing', body: 'hello' }));
   assert.throws(() => store.register({ name: 'Unknown', kind: 'made-up' }));
   assert.equal(fs.readFileSync(path.join(directory, 'state.json'), 'utf8'), before);
 });
@@ -328,7 +328,7 @@ test('credentials stay outside Git even without ignore rules and legacy checkout
   assert.doesNotMatch(staged.stdout, /credentials|runtime\.json/);
 });
 
-test('service authentication, mailbox, invalid requests and restart recovery', async t => {
+test('service authentication, board, invalid requests and restart recovery', async t => {
   const directory = temporary(t);
   const credentialsDirectory = `${directory}-credentials`;
   let service = await startService(directory, credentialsDirectory);
@@ -346,8 +346,8 @@ test('service authentication, mailbox, invalid requests and restart recovery', a
   assert.equal((await request('/state')).status, 401);
   assert.equal((await request('/state', null, 'wrong')).status, 401);
   assert.equal((await request('/state', null, tokenOf(service, lead.id), 'https://example.com')).status, 401);
-  assert.equal((await asLead('/messages', { from: lead.id, to: worker.id, body: 'Please review.' })).status, 200);
-  assert.equal((await asLead('/messages', { to: worker.id, body: 'The sender defaults to the caller.' })).status, 200);
+  assert.equal((await asLead('/board', { from: lead.id, requestTo: worker.id, body: 'Please review.' })).status, 200);
+  assert.equal((await asLead('/board', { body: 'The sender defaults to the caller.' })).status, 200);
   assert.equal((await asWorker('/status', { agentId: worker.id, status: 'invalid' })).status, 400);
   assert.equal((await asWorker('/missing')).status, 404);
   assert.equal((await request('/status', { status: 'idle' }, tokenOf(service, worker.id)).then(r => r.status)), 200);
@@ -357,12 +357,13 @@ test('service authentication, mailbox, invalid requests and restart recovery', a
   const before = service.store.snapshot();
   for (const [endpoint, body] of [
     ['/status', { agentId: lead.id, status: 'needs-permission' }],
-    ['/messages', { from: lead.id, to: worker.id, body: 'spoofed' }],
-    ['/messages', { from: 'user', to: lead.id, body: 'spoofed' }],
-    ['/ack', { agentId: lead.id, messageId: 'any' }],
+    ['/board', { from: lead.id, body: 'spoofed' }],
+    ['/board', { from: 'user', body: 'spoofed' }],
+    ['/board/ack', { agentId: lead.id, postId: 'any' }],
     ['/hooks/codex', { agentId: lead.id, event: {} }]
   ]) assert.equal((await asWorker(endpoint, body)).status, 403, `${endpoint} ${JSON.stringify(body)}`);
-  assert.equal((await asWorker(`/inbox?agentId=${lead.id}`)).status, 403);
+  assert.equal((await asWorker('/inbox')).status, 404);
+  assert.equal((await asWorker('/messages', { body: 'Removed' })).status, 404);
   assert.deepEqual(service.store.snapshot(), before);
   assert.equal(fs.statSync(service.credentialFile(worker.id)).mode & 0o777, 0o600);
   assert.equal(fs.existsSync(path.join(directory, 'runtime.json')), false, 'no shared credential is written');
@@ -382,16 +383,16 @@ test('service authentication, mailbox, invalid requests and restart recovery', a
   assert.equal(fs.readdirSync(credentialsDirectory).length, 0, 'credentials never survive a restart');
   assert.equal((await request('/state', null, stale)).status, 401);
   service.issueCredential(lead.id); service.issueCredential(worker.id);
-  const inbox = await (await asWorker(`/inbox`)).json();
-  assert.equal(inbox.length, 2);
-  assert.equal((await asLead('/ack', { agentId: lead.id, messageId: inbox[0].id })).status, 400);
-  assert.equal((await asWorker('/ack', { agentId: worker.id, messageId: inbox[0].id })).status, 200);
+  const board = await (await asWorker('/board')).json();
+  assert.equal(board.posts.length, 2);
+  assert.equal((await asLead('/board/ack', { postId: board.posts[0].id })).status, 400);
+  assert.equal((await asWorker('/board/ack', { postId: board.posts[0].id })).status, 200);
 });
 
-test('CLI help documents queued delivery without requiring credentials', () => {
+test('CLI help documents shared board semantics without requiring credentials', () => {
   const result = spawnSync(process.execPath, [path.join(__dirname, '../bin/murmurplex-agent'), 'help'], { encoding: 'utf8' });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /does not wake another agent/);
+  assert.match(result.stdout, /No automatic wakeup/);
   assert.match(result.stdout, /task <title> \[status\] \[owner-id\] \[task-id\] \[branch\] \[worktree-path\] \[task options\]/);
   assert.match(result.stdout, /--depends-on=TASK_ID/);
   assert.match(result.stdout, /--clear-branch/);
@@ -413,11 +414,11 @@ test('agent helper reads refreshed credentials after a service restart and never
   service = await startService(path.join(directory, '.murmurplex'), credentialsDirectory);
   service.issueCredential(agent.id);
   const helper = path.join(__dirname, '../bin/murmurplex-agent');
-  const sent = await execFile(process.execPath, [helper, 'send', agent.id, 'Message after restart'], { env: environment });
+  const sent = await execFile(process.execPath, [helper, 'post', 'Message after restart', `--request=${agent.id}`], { env: environment });
   const message = JSON.parse(sent.stdout);
   assert.equal(message.from, agent.id);
-  const received = await execFile(process.execPath, [helper, 'inbox'], { env: environment });
-  assert.equal(JSON.parse(received.stdout)[0].id, message.id);
+  const received = await execFile(process.execPath, [helper, 'board'], { env: environment });
+  assert.equal(JSON.parse(received.stdout).posts[0].id, message.id);
   await execFile(process.execPath, [helper, 'status', 'needs-input'], { env: environment });
   assert.equal(service.store.agent(agent.id).attention, 'needs-input');
   const prerequisite = service.store.task({ title: 'Prerequisite' });
@@ -453,44 +454,76 @@ test('agent helper reads refreshed credentials after a service restart and never
   assert.equal(clearedTask.progress, '');
   assert.equal(clearedTask.nextAction, '');
   assert.equal(clearedTask.blocker, null);
-  const linkedResult = await execFile(process.execPath, [helper, 'send-task', agent.id, task.id, 'Review', 'the changes'], { env: environment });
+  const linkedResult = await execFile(process.execPath, [helper, 'post', 'Review the changes', `--task=${task.id}`, `--request=${agent.id}`, '--mention=user'], { env: environment });
   const linked = JSON.parse(linkedResult.stdout);
   assert.equal(linked.taskId, task.id);
   assert.equal(linked.body, 'Review the changes');
-  await assert.rejects(execFile(process.execPath, [helper, 'send-task', agent.id, 'missing', 'Invalid task'], { env: environment }), /taskId/);
-  await assert.rejects(execFile(process.execPath, [helper, 'send-task', agent.id], { env: environment }), /Use send-task/);
+  assert.deepEqual(linked.mentions, ['user']);
+  await assert.rejects(execFile(process.execPath, [helper, 'post', 'Invalid task', '--task=missing'], { env: environment }), /invalid notice board/);
+  await assert.rejects(execFile(process.execPath, [helper, 'post'], { env: environment }), /Use post/);
+  await assert.rejects(execFile(process.execPath, [helper, 'send', agent.id, 'Removed'], { env: environment }), /Unknown command/);
   await execFile(process.execPath, [helper, 'ack', linked.id], { env: environment });
   const taskClear = await execFile(process.execPath, [helper, 'task', 'Tracked work', 'review', '-', task.id, '-', '-', '--clear-branch', '--clear-worktree'], { env: environment });
   assert.equal(JSON.parse(taskClear.stdout).branch, null);
   assert.equal(JSON.parse(taskClear.stdout).worktreePath, null);
   await execFile(process.execPath, [helper, 'ack', message.id], { env: environment });
-  assert.equal(service.store.inbox(agent.id).length, 0);
+  assert.ok(service.store.board().every(post => post.acknowledgedAt));
   service.revokeCredential(agent.id);
   await assert.rejects(execFile(process.execPath, [helper, 'status', 'idle'], { env: environment }), /ENOENT/);
   await assert.rejects(execFile(process.execPath, [helper, 'status', 'idle'], { env: { ...process.env, MURMURPLEX_AGENT_ID: agent.id } }), /No Murmurplex credentials/);
 });
 
-test('compaction drops only the oldest resolved messages and decisions, never unacknowledged mail', t => {
+test('compaction prunes oldest resolved posts and decisions but preserves pending requests and legacy mail', t => {
   const directory = temporary(t);
   let store = new Store(directory, undefined, { retainResolved: 2 });
   t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const lead = store.register({ name: 'Lead', kind: 'shell' });
   const worker = store.register({ name: 'Worker', kind: 'shell' });
-  const pending = store.send({ from: lead.id, to: worker.id, body: 'pending-oldest' });
+  const legacy = { id: 'legacy', from: 'user', to: worker.id, body: 'Private history', taskId: null, acknowledgedAt: '2026-10-29T10:00:00Z' };
+  store.update(next => { next.legacyMessages.push(legacy); });
+  const pending = store.post({ from: lead.id, requestTo: worker.id, body: 'pending-oldest' });
   const resolved = ['one', 'two', 'three', 'four'].map(body => {
-    const message = store.send({ from: lead.id, to: worker.id, body });
+    const message = store.post({ from: lead.id, requestTo: worker.id, body });
     store.acknowledge(worker.id, message.id);
     return message;
   });
   for (const body of ['d1', 'd2', 'd3']) store.decision(body);
   const state = store.snapshot();
-  assert.deepEqual(state.messages.map(m => m.body), ['pending-oldest', 'three', 'four']);
-  assert.ok(state.messages.some(m => m.id === pending.id && !m.acknowledgedAt));
-  assert.equal(state.messages.some(m => m.id === resolved[0].id), false);
+  assert.deepEqual(state.posts.map(m => m.body), ['pending-oldest', 'three', 'four']);
+  assert.ok(state.posts.some(m => m.id === pending.id && !m.acknowledgedAt));
+  assert.equal(state.posts.some(m => m.id === resolved[0].id), false);
+  assert.deepEqual(state.legacyMessages, [legacy]);
   assert.deepEqual(state.decisions.map(d => d.body), ['d2', 'd3']);
   store.close();
   store = new Store(directory, undefined, { retainResolved: 2 });
-  assert.deepEqual(store.snapshot().messages.map(m => m.body), ['pending-oldest', 'three', 'four']);
+  assert.deepEqual(store.board().map(m => m.body), ['pending-oldest', 'three', 'four']);
+  store.post({ from: 'user', body: 'ordinary notice', mentions: [worker.id] });
+  assert.deepEqual(store.board().map(m => m.body), ['pending-oldest', 'four', 'ordinary notice']);
+  store.acknowledge(worker.id, pending.id);
+  assert.deepEqual(store.board().map(m => m.body), ['four', 'ordinary notice'], 'acknowledging an old request makes it eligible for pruning');
+  const beforeRetry = store.snapshot();
+  assert.throws(() => store.acknowledge(worker.id, pending.id), /Post not found \(it may have been pruned\)/);
+  assert.deepEqual(store.snapshot(), beforeRetry);
+  assert.deepEqual(store.snapshot().legacyMessages, [legacy]);
+});
+
+test('retention never caps pending requests and a failed pruning write preserves disk and memory', t => {
+  const directory = temporary(t);
+  const store = new Store(directory, undefined, { retainResolved: 2 });
+  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const worker = store.register({ name: 'Worker', kind: 'shell' });
+  for (let n = 0; n < 3; n++) store.post({ from: 'user', requestTo: worker.id, body: `Pending ${n}` });
+  store.post({ from: 'user', body: 'Notice one' });
+  store.post({ from: 'user', body: 'Notice two' });
+  const before = store.snapshot();
+  const raw = fs.readFileSync(store.filename, 'utf8');
+  const rename = t.mock.method(fs, 'renameSync', () => { throw new Error('injected retention write failure'); });
+  assert.throws(() => store.post({ from: 'user', body: 'Notice three' }), /retention write failure/);
+  rename.mock.restore();
+  assert.deepEqual(store.snapshot(), before);
+  assert.equal(fs.readFileSync(store.filename, 'utf8'), raw);
+  store.post({ from: 'user', body: 'Notice three' });
+  assert.deepEqual(store.board().map(post => post.body), ['Pending 0', 'Pending 1', 'Pending 2', 'Notice two', 'Notice three']);
 });
 
 test('a read-only view reads the owner\'s state without taking the lock, writing, or migrating', t => {

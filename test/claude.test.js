@@ -166,6 +166,7 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   });
   let selectedAgent;
   let handover;
+  let boardAddress;
   let inheritAuthentication = false;
   let confirmRecovery = async () => undefined;
   const group = { viewColumn: 1, tabs: [] };
@@ -178,7 +179,12 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
     },
     ThemeColor: UIValue, ThemeIcon: UIValue, TreeItem: UIValue,
     StatusBarAlignment: { Left: 1 },
-    env: { clipboard: { async writeText(value) { handover = value; } } },
+    Uri: { parse: value => new URL(value) },
+    env: {
+      clipboard: { async writeText(value) { handover = value; } },
+      async asExternalUri(uri) { return uri; },
+      async openExternal(uri) { boardAddress = uri.toString(); return true; }
+    },
     workspace: {
       isTrusted: true, workspaceFolders: [{ uri: { scheme: 'file', fsPath: root } }],
       getConfiguration: () => ({ get: key => key === 'inheritAuthenticationEnvironment' ? inheritAuthentication : false })
@@ -290,6 +296,10 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   await hook('UserPromptSubmit');
   assert.equal(provider.getChildren().find(item => item.id === agent.id).status, 'working');
   const credential = JSON.parse(fs.readFileSync(credentialFile, 'utf8'));
+  await commands.get('murmurplex.board')();
+  assert.equal(new URL(boardAddress).origin, credential.url);
+  assert.ok(new URL(boardAddress).hash.startsWith('#token='));
+  assert.equal(commands.has('murmurplex.message'), false);
   const taskResponse = await fetch(credential.url + '/tasks', {
     method: 'POST',
     headers: { Authorization: `Bearer ${credential.token}`, 'Content-Type': 'application/json' },
@@ -314,17 +324,18 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   const references = repositoryProvider.getChildren().find(item => item.label === 'Saved task references');
   assert.equal(repositoryProvider.getChildren(references)[0].description, 'PRESENT', 'task changes refresh the saved-reference view without rerunning Git');
   assert.equal(repositoryProvider.getChildren(references)[0].tooltip, `branch main\nworktree ${root}`);
-  const post = (body) => fetch(credential.url + '/messages', {
+  const post = (body) => fetch(credential.url + '/board', {
     method: 'POST', headers: { Authorization: `Bearer ${credential.token}` }, body: JSON.stringify(body)
   });
-  assert.equal((await post({ to: agent.id, body: 'Coordinator-only exchange' })).status, 200);
-  assert.equal((await post({ to: other.id, body: 'Worker-visible exchange', taskId: savedTask.id })).status, 200);
+  assert.equal((await post({ requestTo: agent.id, body: 'Shared coordinator request' })).status, 200);
+  assert.equal((await post({ requestTo: other.id, body: 'Worker-visible exchange', taskId: savedTask.id })).status, 200);
   selectedAgent = other.id;
   await commands.get('murmurplex.brief')();
   assert.match(handover, /Worker-visible exchange/);
   assert.ok(handover.includes(`"taskId": "${savedTask.id}"`));
   assert.match(handover, /Run the recovery tests/);
-  assert.doesNotMatch(handover, /Coordinator-only exchange/);
+  assert.match(handover, /Shared coordinator request/);
+  assert.doesNotMatch(handover, /"legacyMessages"/);
   assert.ok(!handover.includes(credential.token));
   inheritAuthentication = true;
   await commands.get('murmurplex.addTab')({ kind: 'shell', name: 'Compatibility login' });

@@ -1,10 +1,11 @@
 'use strict';
+const { validatePost } = require('./board');
 const KINDS = ['claude', 'codex', 'copilot', 'shell'];
 const PROVIDERS = ['claude', 'codex', 'copilot'];
 const ATTENTION = [null, 'needs-input', 'needs-permission'];
 const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
 const COLLECTIONS = ['agents', 'tasks', 'messages', 'decisions'];
-const CURRENT_VERSION = 6;
+const CURRENT_VERSION = 7;
 
 const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
 
@@ -55,12 +56,19 @@ const MIGRATIONS = {
       if (!isObject(message)) continue;
       if (message.taskId === undefined) message.taskId = null;
     }
+  },
+  6(state) {
+    if (state.messages !== undefined) {
+      state.legacyMessages = state.messages;
+      delete state.messages;
+      state.posts = [];
+    }
   }
 };
 
 function validate(state, states) {
   if (!isObject(state)) throw new Error('Project state must be an object.');
-  for (const key of COLLECTIONS) if (!Array.isArray(state[key])) throw new Error(`Project state field ${key} must be a list.`);
+  for (const key of ['agents', 'tasks', 'posts', 'legacyMessages', 'decisions']) if (!Array.isArray(state[key])) throw new Error(`Project state field ${key} must be a list.`);
   if (!Number.isInteger(state.revision) || state.revision < 0) throw new Error('Project state revision is invalid.');
   const ids = new Set();
   for (const agent of state.agents) {
@@ -70,9 +78,15 @@ function validate(state, states) {
   }
   validateTaskRecords(state.tasks, ids);
   const taskIds = new Set(state.tasks.map(task => task.id));
-  for (const message of state.messages) {
+  for (const message of state.legacyMessages) {
     if (!isObject(message)) throw new Error('Project state has an invalid message.');
     validateMessageTask(message.taskId, taskIds);
+  }
+  const postIds = new Set();
+  for (const post of state.posts) {
+    validatePost(post, ids, taskIds);
+    if (postIds.has(post.id)) throw new Error('Project state has duplicate notice board posts.');
+    postIds.add(post.id);
   }
   if (state.coordinatorId !== null && !ids.has(state.coordinatorId)) throw new Error('Project state coordinator is not a known agent.');
 }
@@ -141,7 +155,8 @@ function migrate(input, states) {
   if (!isObject(input) || !Number.isInteger(input.version) || input.version < 1) throw new Error('Unsupported or invalid project state; original file has been preserved.');
   if (input.version > CURRENT_VERSION) throw new Error(`Project state version ${input.version} was written by a newer Murmurplex (this one supports up to ${CURRENT_VERSION}); original file has been preserved. Update Murmurplex.`);
   const state = JSON.parse(JSON.stringify(input));
-  for (const key of COLLECTIONS) if (!Array.isArray(state[key])) throw new Error('Unsupported or invalid project state; original file has been preserved.');
+  const collections = state.version < 7 ? COLLECTIONS : ['agents', 'tasks', 'posts', 'legacyMessages', 'decisions'];
+  for (const key of collections) if (!Array.isArray(state[key])) throw new Error('Unsupported or invalid project state; original file has been preserved.');
   const from = state.version;
   while (state.version < CURRENT_VERSION) {
     MIGRATIONS[state.version](state);

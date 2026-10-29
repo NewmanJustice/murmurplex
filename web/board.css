@@ -1,0 +1,13 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; }
+main { max-width: 64rem; margin: auto; padding: 1.5rem; }
+form { display: grid; gap: .75rem; }
+label { display: grid; gap: .3rem; }
+textarea, select, button { font: inherit; padding: .5rem; }
+textarea { resize: vertical; }
+button { cursor: pointer; }
+article { border: 1px solid GrayText; border-radius: .4rem; margin-block: 1rem; padding: 1rem; }
+article p { white-space: pre-wrap; overflow-wrap: anywhere; }
+small { color: GrayText; }
+#error { color: light-dark(#a40000, #ffaaaa); white-space: pre-wrap; }
+details { margin-block: 2rem; }

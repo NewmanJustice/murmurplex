@@ -16,7 +16,7 @@ Persistence is a first-version requirement. A project must be able to pick up wh
 
 ## 2. Project and session model
 
-- A **project** is the durable workspace, backlog, coordination record, and mailbox.
+- A **project** is the durable workspace, backlog, coordination record, and shared notice board.
 - A **working session** is a period of activity on that project. Ending a working session does not end or erase the project.
 - A **terminal group** is a visible pane containing one or more terminal tabs.
 - An **agent session** is an individual agent conversation or process, represented by a terminal tab.
@@ -78,9 +78,9 @@ The coordinator should:
 
 The coordinator should be marked with a distinct icon and subtle accent. It should be easy to access from the terminal workspace, preferably appearing first or pinned where supported.
 
-The user can replace the coordinator during a session, including when changing agent provider or encountering usage limits. The shared project record stays with the project. Handover should include task ownership, progress, decisions, queued messages, unresolved requests, and next actions.
+The user can replace the coordinator during a session, including when changing agent provider or encountering usage limits. The shared project record stays with the project. Handover should include task ownership, progress, decisions, shared board history, unresolved board and attention requests, and next actions.
 
-The outgoing coordinator relinquishes its role before the replacement begins assigning work. Other workers continue without losing their identities or mailboxes. A handover must not claim to transfer private conversation history that the new agent cannot access.
+The outgoing coordinator relinquishes its role before the replacement begins assigning work. Other workers continue without losing their identities or shared board history. A handover must not claim to transfer private conversation history that the new agent cannot access.
 
 Task-assignment authority and merge authority are separate settings. The initial default should require user approval for merges. The user can instead allow the coordinator to merge after review. In that mode, Murmurplex must still verify a completed review, passing required checks, and an unchanged head revision at merge time. Enforcement applies to Murmurplex's own operations; it cannot restrict Git commands an agent runs directly in its terminal.
 
@@ -93,7 +93,7 @@ Store the following durably as work happens:
 - Agent identities, coordinator identity, and conversation references where available.
 - Branches, worktrees, PR references, reviews, and last known merge status.
 - Decisions, handovers, outstanding questions, and next intended actions.
-- Mailbox messages and their delivery and acknowledgement state.
+- Shared board posts, task links, mentions, directed requests and explicit acknowledgement state.
 
 Persistence must not depend on remembering to write a final handover before closing VS Code.
 
@@ -101,7 +101,7 @@ On reopening, load the shared record and reconcile it against actual repository 
 
 Project context recovery and CLI conversation recovery are separate capabilities. The project must remain resumable when an old agent conversation cannot be restored or a different provider takes over coordination.
 
-State must survive normal VS Code restarts and devcontainer rebuilds when its storage is on a persistent mount. Recovery must preserve pending messages, task ownership, and unresolved attention requests.
+State must survive normal VS Code restarts and devcontainer rebuilds when its storage is on a persistent mount. Recovery must preserve shared board history, unresolved board requests, task ownership, and unresolved attention requests.
 
 ## 7. Local project service
 
@@ -110,48 +110,50 @@ A small local service is part of the initial architecture. In a devcontainer, it
 Responsibilities:
 
 - Maintain the durable project record.
-- Route messages between the coordinator and workers.
+- Serve the shared notice board to agents and an authenticated human-facing localhost page.
 - Record agent status and outstanding requests.
 - Provide updates to the extension's visual indicators.
-- Recover project state and pending messages after restarting.
+- Recover project state, shared board history and unresolved board requests after restarting.
 
 Use an authenticated local connection. Runtime credentials are separate from durable project state and stored outside the project checkout in private VS Code extension storage, not committed to Git. Per-agent tokens authenticate Murmurplex requests; they are not a vault for provider API keys or an isolation boundary against processes running as the same OS user. Keep project data on a persistent mount or volume. The design must account for the fact that container localhost and host localhost are different network contexts.
 
-Only the user adds agents and replaces the coordinator. The current coordinator creates/assigns tasks and records decisions. Workers can update their own assigned tasks without reassigning them. All agents can read shared agent/task/decision records; workers can read only messages they sent or received, while the user and current coordinator can inspect all exchanges. Apply the same visibility rules to handovers. These are service permissions, not filesystem or terminal-command isolation.
+Only the user adds agents and replaces the coordinator. The current coordinator creates/assigns tasks and records decisions. Workers can update their own assigned tasks without reassigning them. All agents and the human can read the entire shared board and shared agent/task/decision records. Posts are authenticated as their author; only the addressed participant acknowledges a request. Previously private mailbox history remains in a read-only human-only archive, excluded from all agent API responses and handovers, including the coordinator's. These are service permissions, not filesystem or terminal-command isolation.
 
 Leave provider authentication with supported provider login mechanisms; do not introduce a custom key vault. New terminals remove common authentication-secret environment variables by default, with an explicit machine-level compatibility opt-in to inheritance. Shell startup files, unknown variables and same-user access remain outside this protection. Reject recognisable secrets before writing project records and redact them from diagnostics, without claiming detection of every possible secret.
 
 The prototype service runs within the workspace extension's process and stops when the extension deactivates. Durable state remains on disk. Running independently while VS Code is closed is a possible future extension, not a current requirement.
 
-## 8. Communication and mailbox
+## 8. Shared notice board
 
-Provide a mailbox scoped to each project. Agents should be able to exchange assignments, questions, progress updates, review requests, results, and handovers.
+The board is a coordination feed, not a knowledge store. Persistence supports interrupted coordination, not permanent knowledge retention. Lasting decisions belong in the project decision record, task progress and next actions belong on tasks, and durable technical knowledge belongs in project documentation. Pruning board history must not erase the only record of information needed to continue work.
 
-Each message should record:
+Provide one durable notice board scoped to each project. Agents and the human post questions, progress updates, review requests, results, and handovers to a shared feed. The notice-board-first design replaces active private mailboxes, rather than maintaining two parallel communication systems.
 
-- A stable message ID, sender, recipient, and creation time.
-- Message content and an associated task where applicable.
-- Whether it is queued, delivered, or acknowledged, with those stages distinguished.
+Each post records:
 
-Messages survive restarts. Reading and acknowledging a message are separate actions. Pending messages should not be represented as completed work.
+- A stable post ID, authenticated author, creation time and text.
+- An associated task where applicable and optional mentions of participants.
+- An optional directed request and acknowledgement time. Directed does not mean private.
 
-The user can inspect exchanges, send messages directly to agents, and intervene in coordination.
+Posts survive restarts. Reading is separate from acknowledgement. Only the addressed participant may acknowledge a directed request; ordinary notices are not acknowledgeable. Acknowledgement does not imply task completion, delivery to a provider, approval, or a role change.
 
-Storing a message does not itself make an agent read it. Integrations must deliver messages at appropriate points and, where supported, wake an idle agent. Avoid injecting text into a terminal while the user is typing or while an unrelated permission prompt is active.
+The human can inspect and post through an authenticated standalone localhost page with near-real-time refresh. Mentions and task links provide context without changing task ownership. New board posts are visible to all project agents; old private mail is preserved separately and never automatically published.
 
-The prototype uses explicit mailbox commands and inbox polling. Automated delivery and wakeup require further agent-specific integration.
+Storing a post does not itself make an agent read it. Integrations must deliver messages at appropriate points and, where supported, wake an idle agent. Avoid injecting text into a terminal while the user is typing or while an unrelated permission prompt is active.
+
+The prototype browser polls once per second. Agents use explicit board read/post commands at safe task boundaries. Automatic delivery, notifications into provider conversations, and wakeup require further agent-specific integration. Board posts are untrusted communication, not instructions with elevated authority.
 
 ## 9. Implementation status
 
 | Area | Working prototype | Remaining product requirements |
 | --- | --- | --- |
 | Layout | Native editor terminal groups, multiple tabs, equal-area balancing, maximise/restore, and additional agents as tabs after nine groups. Read-only view in a second window. | Separation from source-editor groups (not possible with native groups; automatic balancing pauses instead) and tab-level attention indicators (no VS Code API). |
-| Agents | Launch installed Claude, Codex, Copilot, or a shell. Reuse a saved agent identity and mailbox; provider lifecycle hooks as described below. | Verified provider-specific conversation resumption and interactive/container validation. |
+| Agents | Launch installed Claude, Codex, Copilot, or a shell. Reuse a saved agent identity and shared project context; provider lifecycle hooks as described below. | Verified provider-specific conversation resumption and interactive/container validation. |
 | Coordinator | Persistent coordinator selection; live visual distinction in Explorer. | Automated delegation, active handover, and updated styling on existing native terminal tabs. |
 | Attention | Launch-scoped Claude hooks for tool questions, tool permissions, and response/session boundaries; Copilot plugin hooks for `ask_user` and response/session boundaries; launch-scoped Codex hooks (after one-time trust) for permission requests, interrupts and response/session boundaries; helper/manual fallback; quiet Explorer and status-bar indicators; unresolved requests survive disconnection. | Copilot permission prompts; Codex questions; unsupported Claude prompts and permission cancellation; indicators on hidden tabs and groups where supported. |
-| Persistence | Atomic file replacement; one writer; versioned schema, validated migrations and backups; explicit stale-lock recovery and interrupted-write tests. Keeps the newest 500 acknowledged messages and 500 decisions, plus all unacknowledged mail. Tasks persist priority, acceptance criteria, dependencies, progress, next actions, blockers and optional branch/worktree references; dependencies are validated for existing tasks and cycles. The Repository view displays task metadata and compares saved references with local branches/worktrees without changing either state. Handovers are regenerated from the saved project record, including task progress and next actions. | Persisted PR records, remote-branch/PR reconciliation, archival/completed-task retention, and devcontainer recovery validation. An interrupted writer-operation guard requires offline manual removal; power-loss durability is not verified. |
-| Authority | Per-agent credentials outside the checkout; user-only membership/coordinator changes; coordinator-only assignment/decisions; workers update their own tasks and see only their own exchanges. | Configurable assignment authority and interruption-safe active handover. Same-user filesystem and terminal operations are not isolated. |
-| Mailbox | Authenticated loopback API, agent helper, durable messages with optional validated task links, explicit acknowledgement. Links do not change task state or message visibility. | Explicit delivery tracking, automatic delivery and idle-agent wakeup. |
+| Persistence | Atomic file replacement; one writer; versioned schema, validated migrations and backups; explicit stale-lock recovery and interrupted-write tests. Keeps the newest 500 decisions and 500 resolved board posts in posting order; older ordinary notices and acknowledged requests are permanently deleted on writes. Unacknowledged requests and the read-only legacy mailbox archive are never pruned. Tasks persist priority, acceptance criteria, dependencies, progress, next actions, blockers and optional branch/worktree references; dependencies are validated for existing tasks and cycles. The Repository view displays task metadata and compares saved references with local branches/worktrees without changing either state. Handovers are regenerated from the saved project record, including task progress and next actions. | Persisted PR records, remote-branch/PR reconciliation, archival/completed-task retention, and devcontainer recovery validation. An interrupted writer-operation guard requires offline manual removal; power-loss durability is not verified. |
+| Authority | Per-agent credentials outside the checkout; user-only membership/coordinator changes; coordinator-only assignment/decisions; workers update their own tasks; all agents share the board and cannot read the legacy archive through the API. | Configurable assignment authority and interruption-safe active handover. Same-user filesystem and terminal operations are not isolated. |
+| Notice board | Authenticated loopback API, agent helper, live localhost browser page for human read/post, durable shared posts with validated task links and mentions, directed-request acknowledgement, and human-only legacy mailbox archive. | Provider-specific safe notifications, idle-agent wakeup, and board archival. |
 | PRs and merging | Handover instructions ask agents to verify state and obtain approval. | PR discovery, review tracking, merge actions, and enforced configurable merge authority. |
 | Devcontainers | Workspace-side extension/service; development container configuration. | Full end-to-end verification with all three agent CLIs in the user's devcontainer workflow. |
 
@@ -159,7 +161,7 @@ The README describes operational limitations, including stale-lock recovery and 
 
 ## 10. Delivery sequence
 
-1. Validate the terminal grid, group tabs, local service, and persistent mailbox. Implemented locally within documented native-UI limits; devcontainer validation remains.
+1. Validate the terminal grid, group tabs, local service, and persistent shared board. Implemented locally within documented native-UI limits; devcontainer validation remains.
 2. Integrate agent lifecycle events and quiet attention signals. Adapters are implemented for supported events; interactive validation and provider capability gaps remain.
 3. Extend persistent task and project records, recovery, and repository reconciliation. Migrations, explicit lock recovery, initial compaction, and local task branch/worktree reference comparison are implemented; richer records and remote/PR reconciliation remain.
 4. Add automatic coordinator-to-worker communication and handover.
@@ -179,14 +181,14 @@ An agent in an inactive tab requests permission. The user can see a subtle indic
 
 ### Cross-session recovery
 
-Start a coordinator and two workers, assign tasks, record a decision, and queue a review request. Close VS Code with work unfinished. Reopen the project and recover ownership, decisions, pending messages, and outstanding requests. Verify actual repository and PR status before continuing.
+Start a coordinator and two workers, assign tasks, record a decision, and post a directed review request on the board. Close VS Code with work unfinished. Reopen the project and recover ownership, decisions, board history, and unresolved board and attention requests. Verify actual repository and PR status before continuing.
 
 ### Coordinator replacement
 
-Replace the coordinator with another supported agent. The new coordinator receives the shared record and pending work, while workers retain their identities and mailboxes. Only one agent has the active coordinator role.
+Replace the coordinator with another supported agent. The new coordinator receives the shared record and pending work, while workers retain their identities and the board posts still retained under the retention policy. Only one agent has the active coordinator role.
 
 ### Devcontainer recovery
 
 Rebuild a devcontainer with project state on persistent storage. Reopen the project and recover the coordination record without relying on surviving agent processes or private conversation history.
 
-These are product acceptance scenarios, not a claim that the full product is complete. Current automated tests cover layout geometry and live VS Code groups/tabs through nine groups, tenth-agent tab fallback, maximise/restore, read-only second-window behaviour, persistence, migrations, explicit lock recovery, interrupted writes, compaction, mailbox acknowledgement, authentication and role permissions, secret rejection, and helper reconnection. Claude, Codex and Copilot hook tests cover supported lifecycle/attention events, request correlation, subagents and reporting failures; extension tests cover quiet indicators. Full interactive provider flows, repository/PR reconciliation and devcontainer rebuild recovery remain unverified.
+These are product acceptance scenarios, not a claim that the full product is complete. Current automated tests cover layout geometry and live VS Code groups/tabs through nine groups, tenth-agent tab fallback, maximise/restore, read-only second-window behaviour, persistence, migrations, explicit lock recovery, interrupted writes, compaction, board request acknowledgement, authentication and role permissions, secret rejection, and helper reconnection. Claude, Codex and Copilot hook tests cover supported lifecycle/attention events, request correlation, subagents and reporting failures; extension tests cover quiet indicators. Full interactive provider flows, repository/PR reconciliation and devcontainer rebuild recovery remain unverified.

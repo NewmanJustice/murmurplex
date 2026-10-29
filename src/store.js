@@ -6,7 +6,8 @@ const { randomUUID } = require('node:crypto');
 const { claudeEvent, applyClaudeEvent } = require('./claude');
 const { codexEvent, applyCodexEvent } = require('./codex');
 const { copilotEvent, applyCopilotEvent } = require('./copilot');
-const { CURRENT_VERSION, migrate, validateTaskRecords, validateMessageTask } = require('./migrations');
+const { CURRENT_VERSION, migrate, validateTaskRecords } = require('./migrations');
+const { validatePost } = require('./board');
 const { assertNoSecrets, parseJSON } = require('./security');
 const STATES = new Set(['working', 'idle', 'needs-input', 'needs-permission', 'finished', 'disconnected', 'unknown']);
 const TASK_STATES = new Set(['backlog', 'in-progress', 'blocked', 'review', 'done']);
@@ -26,10 +27,11 @@ function sameLock(left, right) {
   return left && right && left.device === right.device && left.inode === right.inode && left.raw === right.raw;
 }
 const RETAINED_RESOLVED = 500;
-// Drops only the oldest resolved records; unacknowledged messages are never removed.
+// Pending requests and the read-only legacy archive are never pruned.
 function compact(state, keep) {
-  let excess = state.messages.filter(m => m.acknowledgedAt).length - keep;
-  if (excess > 0) state.messages = state.messages.filter(m => !(m.acknowledgedAt && excess-- > 0));
+  let excess = state.posts.filter(post => post.requestTo === null || post.acknowledgedAt !== null).length - keep;
+  if (excess > 0) state.posts = state.posts.filter(post =>
+    !((post.requestTo === null || post.acknowledgedAt !== null) && excess-- > 0));
   if (state.decisions.length > keep) state.decisions = state.decisions.slice(-keep);
 }
 function text(value, name, max = 16000) {
@@ -72,7 +74,7 @@ class Store {
         if (TEMPORARY_STATE.test(name) && fs.lstatSync(path.join(directory, name)).isFile()) fs.unlinkSync(path.join(directory, name));
       }
       const loaded = Store.load(this.filename, checkSecrets);
-      if (loaded === undefined) this.state = { version: CURRENT_VERSION, revision: 0, coordinatorId: null, agents: [], tasks: [], messages: [], decisions: [] };
+      if (loaded === undefined) this.state = { version: CURRENT_VERSION, revision: 0, coordinatorId: null, agents: [], tasks: [], posts: [], legacyMessages: [], decisions: [] };
       else {
         const { state, from, raw } = loaded;
         // Keep the pre-migration file once per source version; never overwrite an earlier backup.
@@ -99,7 +101,7 @@ class Store {
   static readOnly(directory, checkSecrets = assertNoSecrets) {
     const filename = path.join(directory, 'state.json');
     let state;
-    const reload = () => { const loaded = Store.load(filename, checkSecrets); state = loaded ? loaded.state : { version: CURRENT_VERSION, revision: 0, coordinatorId: null, agents: [], tasks: [], messages: [], decisions: [] }; };
+    const reload = () => { const loaded = Store.load(filename, checkSecrets); state = loaded ? loaded.state : { version: CURRENT_VERSION, revision: 0, coordinatorId: null, agents: [], tasks: [], posts: [], legacyMessages: [], decisions: [] }; };
     reload();
     return { readOnly: true, filename, reload, snapshot: () => copy(state) };
   }
@@ -134,7 +136,7 @@ class Store {
   snapshotFor(agentId) {
     this.agent(agentId);
     const snapshot = this.snapshot();
-    if (snapshot.coordinatorId !== agentId) snapshot.messages = snapshot.messages.filter(message => message.from === agentId || message.to === agentId);
+    delete snapshot.legacyMessages;
     return snapshot;
   }
   update(fn) {
@@ -219,23 +221,30 @@ class Store {
     this.agent(id);
     return this.update(next => { next.coordinatorId = id; });
   }
-  send(input) {
+  post(input) {
     if (input.from !== 'user') this.agent(input.from);
-    this.agent(input.to); text(input.body, 'body');
+    text(input.body, 'body');
     const taskId = input.taskId === undefined ? null : input.taskId;
-    validateMessageTask(taskId, new Set(this.state.tasks.map(task => task.id)));
+    const post = {
+      id: randomUUID(), from: input.from, body: input.body, taskId,
+      mentions: input.mentions === undefined ? [] : input.mentions,
+      requestTo: input.requestTo === undefined ? null : input.requestTo,
+      createdAt: new Date().toISOString(), acknowledgedAt: null
+    };
+    validatePost(post, new Set(this.state.agents.map(agent => agent.id)), new Set(this.state.tasks.map(task => task.id)));
     return this.update(next => {
-      const message = { id: randomUUID(), from: input.from, to: input.to, body: input.body, taskId, createdAt: new Date().toISOString(), acknowledgedAt: null };
-      next.messages.push(message); return message;
+      const saved = copy(post);
+      next.posts.push(saved); return saved;
     });
   }
-  inbox(id) { this.agent(id); return copy(this.state.messages.filter(m => m.to === id && !m.acknowledgedAt)); }
-  acknowledge(agentId, messageId) {
-    this.agent(agentId);
+  board() { return copy(this.state.posts); }
+  acknowledge(agentId, postId) {
+    if (agentId !== 'user') this.agent(agentId);
     return this.update(next => {
-      const message = next.messages.find(m => m.id === messageId && m.to === agentId);
-      if (!message) throw new Error('Message does not belong to this agent.');
-      message.acknowledgedAt ||= new Date().toISOString(); return message;
+      const post = next.posts.find(post => post.id === postId);
+      if (!post) throw new Error('Post not found (it may have been pruned).');
+      if (post.requestTo !== agentId) throw new Error('Only the addressed participant can acknowledge this request.');
+      post.acknowledgedAt ||= new Date().toISOString(); return post;
     });
   }
   task(input) {

@@ -14,8 +14,8 @@ be used today.
 | --- | --- | --- |
 | Terminal workspace | Native editor groups, agent tabs, automatic grid balancing, maximise/restore, tenth-agent-as-tab, read-only second-window view, passing graphical validation for one to nine groups. | Isolation from source-editor groups and tab-level indicators (no VS Code API); devcontainer settle timing. |
 | Lifecycle and attention | Claude, Codex and Copilot hook adapters, persistent requests, quiet Explorer/status-bar indicators, manual fallback. | Copilot permission prompts, Codex questions, unsupported Claude prompts, tab/group indicators. |
-| Project record | Atomic writes, single writer, agents, coordinator identity, tasks with priorities, acceptance criteria, cycle-checked dependencies, progress, next actions and blockers, decisions, mailbox, versioned schema with tested migrations/backups, explicit stale-lock recovery, interrupted-write coverage and initial compaction. Read-only Git observations show branch, `HEAD`, working-tree changes and worktrees on startup; task branch/worktree references are persisted and compared locally. | Persisted PR references, remote-branch/PR reconciliation, archival/completed-task retention, devcontainer recovery; crashed operation guards still require offline manual removal. No power-loss durability guarantee. |
-| Coordination | Saved coordinator selection, recipient-filtered copyable handover, per-agent credentials and enforced coordinator/worker permissions. | Configurable assignment authority, interruption-safe active handover, delivery tracking, automatic delivery and wakeup. |
+| Project record | Atomic writes, single writer, agents, coordinator identity, tasks with priorities, acceptance criteria, cycle-checked dependencies, progress, next actions and blockers, decisions, shared notice board and human-only legacy mailbox archive, versioned schema with tested migrations/backups, explicit stale-lock recovery, interrupted-write coverage and initial compaction. Read-only Git observations show branch, `HEAD`, working-tree changes and worktrees on startup; task branch/worktree references are persisted and compared locally. | Persisted PR references, remote-branch/PR reconciliation, archival/completed-task retention, devcontainer recovery; crashed operation guards still require offline manual removal. No power-loss durability guarantee. |
+| Coordination | Saved coordinator selection, copyable shared-context handover excluding the legacy archive, per-agent credentials and enforced coordinator/worker permissions. | Configurable assignment authority, interruption-safe active handover, delivery tracking, automatic delivery and wakeup. |
 | PR workflow | Handover text asks agents to verify state and get approval. | PR/review tracking, controlled merging, approval UI. |
 | Engineering | Node tests, syntax check, graphical test script, GitHub Actions CI (Node 20/22, Xvfb VS Code test). | No packaging, no compatibility testing against provider CLI versions. |
 
@@ -48,14 +48,14 @@ Validation as of 29 October 2026 (observations, not guarantees):
 
 ## Delivery rules
 
-- Persist meaningful changes as they happen; preserve identities, mailboxes, task
+- Persist meaningful changes as they happen; preserve identities, board posts, task
   ownership and unresolved requests through upgrades, restarts and role changes.
 - Project recovery is independent of provider conversation recovery.
 - Use supported provider events and interfaces. Never infer completion from
   silence, treat terminal prose as a protocol, or inject keystrokes into a
   user-controlled terminal.
 - Report provider capability gaps as limitations, not successes; keep manual
-  status reporting and mailbox polling available.
+  status reporting and board polling available.
 - Never silently approve provider permissions; keep assignment and merge
   authority separate.
 - Keep the service in the extension process for now.
@@ -115,8 +115,8 @@ These are small and time-boxed. They change later designs, so decide them first.
    scoped (for example, skipped when source editors are open). Revisit a
    webview or pseudoterminal design only if hidden-tab indicators become a
    release requirement. Owner accepted native groups on 2026-10-28.
-4. **State schema versioning and migrations (done).** State is version 3.
-   Versions 1 and 2 migrate in memory with validation and a one-time original-file
+4. **State schema versioning and migrations (done).** State is version 7.
+   Older versions migrate in memory with validation and a one-time original-file
    backup before writing. Newer or invalid state is refused untouched. Tests
    cover migration, backups and refusal; future state-shape changes require a
    new migration and version bump.
@@ -125,7 +125,7 @@ These are small and time-boxed. They change later designs, so decide them first.
    the checkout, with 0700 credential directories. This is local authentication,
    not a provider-key vault or same-user isolation. User-only membership/role
    changes, coordinator-only task assignment/decisions, worker-owned task updates
-   and recipient-filtered state/handovers are enforced. Native provider login is
+   and agent state/handovers excluding the legacy archive are enforced. Native provider login is
    the default, with explicit opt-in to authentication-environment inheritance.
    Recognisable secrets are rejected from records and redacted in diagnostics.
    Pre-commit and CI Gitleaks scans protect this repository; enabling GitHub push
@@ -239,10 +239,11 @@ Work:
   blockers and review status; validate references and dependency cycles.
 - Persist branch/worktree references, next actions, handovers, conversation
   references and unresolved questions.
-- Define the message lifecycle once: queued, delivered (with time and delivery
-  mechanism) and acknowledged, plus task links. Reading is not acknowledgement.
-  Milestone 4 implements automatic delivery against this model.
-- Bound state growth: retention or archival of acknowledged messages and old
+- Replace point-to-point mailboxes with a shared board: task-linked posts,
+  mentions and directed requests with explicit acknowledgement. A browser
+  refresh is not proof of receipt by an agent. Preserve old private mail in a
+  human-only archive, never automatically publish it.
+- Bound state growth: retention or archival of board posts and old
   records, with a tested compaction that never drops unresolved items.
 - Reconcile local repository/worktree state on reopening. Preserve history, show
   conflicts and stale records, and never repair destructively.
@@ -260,11 +261,13 @@ Acceptance:
 - A devcontainer rebuild with persistent state recovers the record without
   surviving agent processes or old credentials.
 
-Status: schema version 6 and migration backups, explicit stale-lock recovery,
+Status: schema version 7 and migration backups, explicit stale-lock recovery,
 writer-ownership checks, interrupted-write cleanup and initial compaction are
-implemented and tested. Each write retains the newest 500 acknowledged messages
-and 500 decisions, without archival; unacknowledged messages are preserved and
-completed tasks are not compacted. Startup now reads branch, `HEAD`,
+implemented and tested. Each write retains the newest 500 decisions.
+The newest 500 resolved board posts (ordinary notices and acknowledged
+requests, in posting order) are retained; older resolved posts are permanently
+deleted on writes. Unacknowledged requests, archived private mail and completed
+tasks are never compacted. An unlimited unresolved backlog remains a growth risk. Startup now reads branch, `HEAD`,
 working-tree changes and worktrees into a separate Explorer view without
 writing Git or Murmurplex state; observations are refreshed manually after
 Git or task-reference changes and failures remain explicitly unverified.
@@ -284,10 +287,15 @@ Repository Explorer; it does not automatically alter task status or Git state.
 Handovers are regenerated from this saved record. In devcontainers, the
 project's `.murmurplex/state.json` must remain on the persistent workspace
 mount; runtime credentials remain outside that mount and are recreated.
-Messages can carry a validated optional task ID through the helper/API.
-Links survive recovery without changing task state or message visibility;
-reading remains separate from acknowledgement. Verified delivery tracking
-and automatic delivery remain unimplemented.
+The shared board replaces active mailboxes. Posts can carry a validated task
+ID, mentions and a directed request through the helper/API. All agents see
+shared posts; only the addressed participant acknowledges a request.
+The authenticated standalone localhost page lets the human read and post
+with one-second polling. A schema 6 migration preserves previous private mail
+in a human-only read-only archive, excluded from all agent handovers and state.
+Board data remains in the mounted project record; browser credentials are
+ephemeral. Provider notifications, automatic wakeup and actual devcontainer
+forwarding/rebuild validation remain unimplemented or unverified.
 
 ## 4. Coordination and delivery
 
@@ -314,7 +322,7 @@ Work:
 Acceptance:
 
 - Replace a coordinator across supported providers while workers keep identities,
-  ownership and mailboxes.
+  ownership and shared board history.
 - At most one coordinator can assign work; brief absence of a coordinator is
   preferable to overlapping authority.
 - Fault injection before and after relinquishment, delivery and acceptance;
@@ -429,10 +437,16 @@ not imply work is still running or complete. PR state remains unverified until
 milestone 5.
 
 Task priorities, acceptance criteria, validated dependencies, progress,
-blockers and next actions are now persisted, and messages can link to existing
-tasks. Recommended next increment: define verified mailbox delivery tracking
-separately from queueing and acknowledgement, before adding provider-specific
-automatic delivery or idle wakeup.
+blockers and next actions are persisted. A shared notice board now replaces
+point-to-point mailboxes, with task links, mentions, directed requests and
+an authenticated human-facing localhost page. Existing private mail stays
+in a human-only archive and is not published.
+
+Recommended next increment: validate a supported way for agents to discover
+new board posts at safe boundaries without terminal injection or false
+acknowledgement. Browser polling is live; provider conversation notification
+and idle wakeup are not implemented. Board retention preserves all unresolved
+requests and the newest 500 resolved posts; older resolved posts are deleted.
 
 Other open v0.1 gates are richer task/recovery records, the remaining retention
 policy, interactive provider validation, devcontainer layout/rebuild recovery,

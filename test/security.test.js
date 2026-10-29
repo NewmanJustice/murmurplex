@@ -71,37 +71,38 @@ test('only the user manages membership; coordinator authority follows handover a
   assert.equal((await request(worker, '/tasks', { title: 'Assigned by new coordinator', ownerId: other.id })).status, 200);
 });
 
-test('worker state includes only sent and received messages; the live coordinator can inspect all exchanges', async t => {
+test('all agents share the board while legacy mail is excluded from agent state', async t => {
   const { service, agents: [lead, worker, other], request } = await fixture(t);
-  service.store.send({ from: lead.id, to: other.id, body: 'Not for worker' });
-  service.store.send({ from: 'user', to: other.id, body: 'User to other' });
-  service.store.send({ from: worker.id, to: other.id, body: 'Sent by worker' });
-  service.store.send({ from: lead.id, to: worker.id, body: 'Received by worker' });
+  service.store.post({ from: lead.id, requestTo: other.id, body: 'Shared request' });
+  service.store.post({ from: 'user', body: 'User post' });
+  service.store.post({ from: worker.id, body: 'Worker post' });
+  service.store.post({ from: lead.id, requestTo: worker.id, body: 'Another request' });
   const own = await (await request(worker, '/state')).json();
-  assert.deepEqual(own.messages.map(message => message.body), ['Sent by worker', 'Received by worker']);
-  assert.equal((await (await request(lead, '/state')).json()).messages.length, 4);
+  assert.equal(own.posts.length, 4);
+  assert.equal(own.legacyMessages, undefined);
+  assert.equal((await (await request(lead, '/state')).json()).legacyMessages, undefined);
   service.store.coordinator(other.id);
-  assert.equal((await (await request(other, '/state')).json()).messages.length, 4);
-  assert.deepEqual((await (await request(lead, '/state')).json()).messages.map(message => message.body), ['Not for worker', 'Received by worker']);
+  assert.deepEqual((await (await request(other, '/state')).json()).posts, own.posts);
+  assert.deepEqual((await (await request(lead, '/state')).json()).posts, own.posts);
 });
 
-test('task-linked messages preserve sender identity, visibility and task ownership', async t => {
+test('task-linked board requests preserve sender identity and task ownership', async t => {
   const { service, agents: [lead, worker, other], request } = await fixture(t);
   const task = service.store.task({ title: 'Review', ownerId: other.id });
-  const response = await request(worker, '/messages', { to: lead.id, taskId: task.id, body: 'Can I help review?' });
+  const response = await request(worker, '/board', { requestTo: lead.id, mentions: [other.id], taskId: task.id, body: 'Can I help review?' });
   assert.equal(response.status, 200);
   const message = await response.json();
   assert.equal(message.from, worker.id);
   assert.equal(message.taskId, task.id);
   assert.deepEqual(service.store.snapshot().tasks[0], task);
-  assert.equal((await (await request(worker, '/state')).json()).messages[0].taskId, task.id);
-  assert.deepEqual((await (await request(other, '/state')).json()).messages, [], 'owning the linked task does not grant message access');
+  assert.equal((await (await request(worker, '/state')).json()).posts[0].taskId, task.id);
+  assert.equal((await (await request(other, '/state')).json()).posts[0].id, message.id, 'requests are public even to other agents');
   const before = service.store.snapshot();
-  assert.equal((await request(worker, '/messages', { from: other.id, to: lead.id, taskId: task.id, body: 'Spoofed sender' })).status, 403);
-  assert.equal((await request(worker, '/messages', { to: lead.id, taskId: 'missing', body: 'Invalid link' })).status, 400);
-  assert.equal((await request(worker, '/ack', { messageId: message.id })).status, 400);
+  assert.equal((await request(worker, '/board', { from: other.id, taskId: task.id, body: 'Spoofed sender' })).status, 403);
+  assert.equal((await request(worker, '/board', { taskId: 'missing', body: 'Invalid link' })).status, 400);
+  assert.equal((await request(worker, '/board/ack', { postId: message.id })).status, 400);
   assert.deepEqual(service.store.snapshot(), before);
-  assert.equal((await request(lead, '/ack', { messageId: message.id })).status, 200);
+  assert.equal((await request(lead, '/board/ack', { postId: message.id })).status, 200);
 });
 
 test('secret-bearing writes fail without persistence or diagnostic leaks, including live Murmurplex tokens', async t => {
@@ -110,12 +111,12 @@ test('secret-bearing writes fail without persistence or diagnostic leaks, includ
   const token = JSON.parse(fs.readFileSync(service.credentialFile(worker.id), 'utf8')).token;
   const before = fs.readFileSync(path.join(directory, 'state.json'), 'utf8');
   for (const [route, body] of [
-    ['/messages', { to: worker.id, body: `Please use ${providerKey}` }],
-    ['/messages', { to: worker.id, body: `Please use ${token}` }],
+    ['/board', { body: `Please use ${providerKey}` }],
+    ['/board', { body: `Please use ${token}` }],
     ['/tasks', { title: providerKey }],
     ['/decisions', { body: providerKey }],
-    ['/messages', { to: worker.id, body: JSON.stringify({ password: randomBytes(24).toString('base64url') }) }],
-    ['/messages', { to: worker.id, body: `AWS_SECRET_ACCESS_KEY=${randomBytes(24).toString('base64')}` }]
+    ['/board', { body: JSON.stringify({ password: randomBytes(24).toString('base64url') }) }],
+    ['/board', { body: `AWS_SECRET_ACCESS_KEY=${randomBytes(24).toString('base64')}` }]
   ]) {
     const response = await request(lead, route, body);
     assert.equal(response.status, 400);

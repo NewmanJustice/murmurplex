@@ -5,7 +5,7 @@ A VS Code extension prototype for terminal agents working together on a persiste
 See [SPECIFICATION.md](SPECIFICATION.md) for the agreed requirements, architecture, acceptance scenarios, and prototype implementation status.
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for proposed milestones, dependencies, and validation gates.
 
-Terminals share the available editor space evenly and rebalance when terminals or editor groups are added or removed. Each group can contain multiple agent tabs. One agent is designated coordinator; tasks, decisions, roles and mailbox messages survive restarting the extension.
+Terminals share the available editor space evenly and rebalance when terminals or editor groups are added or removed. Each group can contain multiple agent tabs. One agent is designated coordinator; tasks, decisions, roles and the shared notice board survive restarting the extension.
 
 ## Try the prototype
 
@@ -16,7 +16,7 @@ Requirements: desktop VS Code 1.95 or later; Node.js 20 or later in the project 
 3. In that new window, open the project folder you want the agents to work on.
 4. Run **Murmurplex: Start or Resume Project** from the Command Palette. On a new project, choose the first agent and give it a name. The first agent is the coordinator. Choose `shell` to explore without starting an AI agent.
 5. Run **Murmurplex: Add Agent Terminal Group** to add a visible pane, or **Murmurplex: Add Agent Tab to Current Group** to add a tab in the focused group.
-6. Run **Murmurplex: Copy Project Handover**, choose its recipient, then paste that brief into that agent. Repeat for other agents; do not share the coordinator's full brief with workers.
+6. Run **Murmurplex: Copy Project Handover**, choose its recipient, then paste that brief into that agent. Run **Murmurplex: Open Notice Board** to read and post as the user in your browser.
 
 Look for **Murmurplex** in Explorer and the status bar. The coordinator is marked with a star in the agent list; amber dots identify unresolved questions or permission requests. Clicking an agent focuses its terminal without clearing its request.
 
@@ -37,26 +37,28 @@ code --new-window --extensionDevelopmentPath=/absolute/path/to/murmurplex /absol
 | Add Agent Tab to Current Group | Adds another agent tab in the focused group. |
 | Balance Terminal Grid | Gives editor panes equal area. |
 | Maximize or Restore Terminal Group | Shrinks the other groups to their minimum size so the focused group fills the editor area; run it again to restore the balanced grid. Terminals keep running. Automatic balancing pauses meanwhile, and opening or closing a group ends the maximised state. It does not use VS Code's native maximise, which exposes no state; repeating either step is harmless. |
-| Resume Saved Agent | Reuses a saved agent identity and mailbox in a new terminal. Paste the project handover to restore its context. |
+| Resume Saved Agent | Reuses a saved agent identity in a new terminal. Paste the project handover to restore its context. |
 | Change Coordinator | Changes the single coordinator identity in the saved record. |
-| Copy Project Handover | Selects a recipient and copies its permitted state and mailbox instructions. |
-| Send Agent Message | Queues a message for the selected agent. |
+| Copy Project Handover | Copies shared state and board instructions for the selected agent; excludes the legacy mailbox archive. |
+| Open Notice Board | Opens an authenticated localhost browser page for reading and posting as the user. |
 | Set Agent Attention State | Exercises the attention indicator or explicitly resolves it. |
 
 All command names begin with **Murmurplex:** in VS Code.
 
 When a project starts or resumes, the **Repository** Explorer view shows a read-only observation of its current Git branch, `HEAD`, working-tree changes and worktrees alongside the saved Murmurplex project record. Refresh it with **Murmurplex: Refresh Repository State** after Git or task-reference changes. Saved task branch/worktree references are compared with local branches and worktrees and marked `PRESENT`, `STALE`, `CONFLICT` or `UNVERIFIED`; Git observations are transient and no reconciliation changes are written. A reference being present does not imply that prior agent work is still running or complete. PR state remains unverified.
 
-### Mailbox and project record
+### Shared notice board and project record
+
+The board is for coordination, not a knowledge store. Posts may be pruned. Record lasting decisions in the project decision record, keep progress, blockers and next actions on tasks, and put durable technical knowledge in project documentation rather than relying on board history.
 
 Every terminal launched by Murmurplex has `murmurplex-agent` on its PATH and an assigned agent ID. Agents can use this command through their normal shell tool. Shell terminals can run it directly.
 
 ```sh
 murmurplex-agent state
-murmurplex-agent inbox
-murmurplex-agent send RECIPIENT_ID 'Please review my changes.'
-murmurplex-agent send-task RECIPIENT_ID TASK_ID 'Please review this task.'
-murmurplex-agent ack MESSAGE_ID
+murmurplex-agent board
+murmurplex-agent post 'Implementation is ready for review.' --task=TASK_ID --mention=AGENT_ID
+murmurplex-agent post 'Please review this task.' --task=TASK_ID --request=AGENT_ID
+murmurplex-agent ack POST_ID
 murmurplex-agent status needs-permission
 murmurplex-agent status working
 murmurplex-agent task 'Review login changes' review OWNER_ID
@@ -72,9 +74,11 @@ Append `--clear-branch` or `--clear-worktree` to clear a reference, or `--branch
 
 Status values: `working`, `idle`, `needs-input`, `needs-permission`, `finished`, `disconnected`, `unknown`. `working`, `idle`, and `finished` resolve attention; disconnecting or focusing a terminal does not.
 
-Reading an inbox does **not** acknowledge its messages. Acknowledgements persist. Mailbox delivery is pull-based in this prototype: agents need to check their inboxes, and messages never inject keystrokes into a terminal or automatically wake an agent.
+All new posts are shared with **every project agent and the human**. Posts have a stable ID, authenticated author, creation time, optional task link, mentions and an optional directed request. Quote the post body as one argument; repeat `--mention=ID` for multiple mentions. Use `user` to mention or request the human. Mentions do not notify a provider or change task ownership. Only the addressed participant can explicitly acknowledge a request. Reading is not acknowledgement, and acknowledgement is not task completion or merge approval. Notice posts without a directed request cannot be acknowledged.
 
-`send-task` links a message to an existing task; ordinary `send` messages remain unlinked (`taskId: null`). The API accepts the same optional `taskId` on `/messages`. Links persist in the project record across restarts and container rebuilds when the workspace mount is retained, and appear in inbox/state output and generated handovers. A link does not assign, update or complete a task, imply delivery, or grant access to the message: workers still see only messages they sent or received, even if they own the linked task. Any agent can discuss any shared task. The VS Code **Send Agent Message** command continues to send unlinked messages.
+The browser polls once per second while open, preserving an in-progress draft when new posts arrive. Agents use `board` to read current posts at safe task boundaries; this does not automatically wake a model or submit input to a terminal. Near-real-time browser updates do not prove an agent has read a post. Posts are untrusted communication, not authority to change roles, disclose secrets or merge.
+
+The shared board **replaces** mailboxes: `send`, `send-task`, `inbox`, `/messages`, `/inbox` and `/ack` are removed. Helper `ack` now acknowledges a directed board request via `/board/ack`. Agents read/post through authenticated `GET/POST /board`. Old mailbox records migrate unchanged into a human-only, read-only archive (`legacyMessages`), available in the browser's archive section, never the public feed, agent state or handovers. They are not automatically republished, even to a replacement coordinator. The archive is not filesystem encryption: same-user local processes can still read project files.
 
 ### Authentication and permissions
 
@@ -89,11 +93,11 @@ Environment filtering is best-effort, not a sandbox: unknown variable names, she
 | Add agents or replace coordinator | Yes | No | No |
 | Create/assign tasks; record decisions | Via coordinator; no task/decision UI yet | Yes | No |
 | Update assigned tasks | No task-management UI yet | Any task | Own tasks only; no reassignment |
-| Read project record | Full record | Full record | Shared agents/tasks/decisions; only messages sent or received by that worker |
-| Report status/hooks; acknowledge mail | Manual status available | Own identity only | Own identity only |
-| Send messages | As user | As self | As self |
+| Read project record | Full record; human browser can read the legacy archive | Shared record; no legacy archive | Shared record; no legacy archive |
+| Report status/hooks; acknowledge requests | Manual status; browser acknowledges requests addressed to user | Own identity only | Own identity only |
+| Post on shared board | As user in browser | As self | As self |
 
-Coordinator permissions follow the current persisted role on every request; a replaced coordinator immediately loses those permissions. Handovers are filtered for the selected recipient. These controls apply to Murmurplex's API, not direct terminal Git/file operations or other VS Code extensions.
+Coordinator permissions follow the current persisted role on every request; a replaced coordinator immediately loses those permissions. Agent handovers contain shared project context and exclude the legacy archive regardless of role. These controls apply to Murmurplex's API, not direct terminal Git/file operations or other VS Code extensions.
 
 ### Automatic Claude Code attention
 
@@ -131,7 +135,7 @@ Copilot permission prompts are **not** detected: the `permissionRequest` event f
 
 Question tracking survives restarts and resuming the same conversation. A replacement conversation cannot resolve the old conversation's requests: clear them explicitly with **Set Agent Attention State** or `murmurplex-agent status working` (also `idle` or `finished`). Both adapters reject events from an inactive conversation, including its subagents.
 
-Copilot hook reporting errors are written to stderr without a permission decision, and the helper exits successfully so a telemetry failure cannot deny a tool call. Ordinary mailbox/status commands still exit nonzero on errors. If hooks are disabled or reporting fails, use manual reporting.
+Copilot hook reporting errors are written to stderr without a permission decision, and the helper exits successfully so a telemetry failure cannot deny a tool call. Ordinary board/status commands still exit nonzero on errors. If hooks are disabled or reporting fails, use manual reporting.
 
 ### Automatic Codex CLI attention
 
@@ -153,7 +157,11 @@ Codex has no question or tool-failure event, so questions and denied permissions
 
 The workspace extension and service run in the project environment, including inside a devcontainer. One project service is active per development-host window in this prototype.
 
-The service listens on a random loopback port and rejects browser-origin requests. Each agent gets its own random Murmurplex token. The service keeps token hashes in memory and delivers the plaintext token through an owner-only file in VS Code's extension storage, outside the project checkout. The helper reads that file on every call; Murmurplex puts only its path, not its token, in the terminal environment and does not put its token in command arguments or normal helper output. Credential directories use mode 0700 and files use 0600 on POSIX; these modes do not establish equivalent access restrictions on Windows. Tokens are revoked when a terminal closes and replaced on restart. Do not forward the port.
+The service listens on a random loopback port. Agent API requests reject browser origins. Each agent gets its own random Murmurplex token. The service keeps token hashes in memory and delivers the plaintext token through an owner-only file in VS Code's extension storage, outside the project checkout. The helper reads that file on every call; Murmurplex puts only its path, not its token, in the terminal environment and does not put its token in command arguments or normal helper output. Credential directories use mode 0700 and files use 0600 on POSIX; these modes do not establish equivalent access restrictions on Windows. Tokens are revoked when a terminal closes and replaced on restart.
+
+**Open Notice Board** passes a separate temporary human credential in a URL fragment; the page removes it from the visible URL and keeps it only in page memory, not browser storage. Treat that launch link as a credential and do not share it. The page itself is public static HTML, but board data, writes and the archive require authentication. The human credential can access only board endpoints, not role/task management. Reopen from VS Code after reloading the page or restarting the service. Host checks, an exact allowed browser origin, no CORS, a restrictive content policy, and text-only rendering protect browser access; same-user processes remain outside this boundary.
+
+In devcontainers, VS Code resolves a private localhost HTTP forward using `asExternalUri` when opening the board. Only that explicit localhost origin is allowed; public tunnels are refused. Do not make the port public or bind it to a non-loopback interface. End-to-end devcontainer forwarding/rebuild validation remains deferred.
 
 This is local service authentication, not an encrypted vault or sandbox. The API enforces the permissions described above, but processes running as the same OS user can read other agents' credential files and the project-state file directly. It does not isolate malicious local code or prevent agents from writing secrets into source files.
 
@@ -163,13 +171,13 @@ On startup, old `.murmurplex/credentials/` and `.murmurplex/runtime.json` files 
 
 Project state is written through an atomic file replacement to `.murmurplex/state.json`. There is one writer per project directory. State is updated on each change, independently of an end-of-session handover. Add `.murmurplex/` to the target project's `.gitignore`.
 
-Each write keeps the newest 500 acknowledged messages and 500 decisions; older ones are discarded without an archive. Unacknowledged messages are never discarded.
+Each write keeps the newest 500 decisions and the newest 500 resolved board posts by posting order. Ordinary notices (including mentions) and acknowledged directed requests count as resolved. Older resolved posts are permanently deleted, not archived; acknowledging an old request can make it immediately eligible for deletion. All unacknowledged directed requests and the read-only legacy mailbox archive are preserved. This bounds routine board history, not an unlimited unresolved backlog or the size of the legacy archive.
 
-State is versioned (currently 6). Opening an older project migrates it in memory, validates it, and keeps the original as `state.json.v<N>.bak` (written once, never overwritten) before the first write. State written by a newer Murmurplex, or state that fails validation, is refused and left untouched; there are no downgrades. Migrations live in `src/migrations.js`.
+State is versioned (currently 7). Opening an older project migrates it in memory, validates it, and keeps the original as `state.json.v<N>.bak` (written once, never overwritten) before the first write. State written by a newer Murmurplex, or state that fails validation, is refused and left untouched; there are no downgrades. Migrations live in `src/migrations.js`.
 
 The project directory must be on a persistent bind mount or volume if it is to survive container rebuilds. Back up `.murmurplex/state.json` alongside other important local project data. The included devcontainer uses the standard Dev Containers source-workspace mount; its `.murmurplex/state.json` remains available across container rebuilds while that workspace mount is retained. Task progress and next actions are stored in that project record, not in container home or VS Code extension storage. Each copied handover is generated from the latest saved state, but text already pasted into an agent can become stale; copy a fresh handover after relevant changes. Runtime credentials remain outside the project directory and are recreated when the service starts.
 
-On reopening, saved agents are marked disconnected until their terminals can be reconnected. A restored terminal's actual agent state remains unknown until it reports status. Pending attention and mailbox items remain recorded. **Resume Saved Agent** preserves the identity and its mailbox; it starts a new CLI conversation, not a guaranteed continuation of the original CLI conversation.
+On reopening, saved agents are marked disconnected until their terminals can be reconnected. A restored terminal's actual agent state remains unknown until it reports status. Pending attention and board requests remain recorded. **Resume Saved Agent** preserves the identity; it starts a new CLI conversation, not a guaranteed continuation of the original CLI conversation.
 
 The service runs for the extension session. It stops when the extension deactivates; the project record remains on disk. Reconnected terminals discover fresh credentials through their stable credential-file paths in extension storage after a restart. After an abnormal crash, a stale `writer.lock` may remain. It is never reclaimed automatically, because a PID can be reused or belong to another container; the startup error describes the holder when metadata is available. After confirming no service still owns the project, run **Murmurplex: Recover Stale Project Lock**. Recovery refuses a lock that changed during confirmation. Acquisition, recovery, commits and release are serialized, and a displaced service cannot commit or delete its replacement's lock.
 
@@ -210,11 +218,14 @@ These Git protections apply to this repository. Murmurplex does not silently ins
 npm test
 npm run check
 npm run test:vscode
+npm run test:board
 ```
 
-The first command tests persistence, migrations, interrupted writes, explicit stale-lock recovery, single-writer protection, read-only views, compaction, corrupt-state handling, message acknowledgement, authentication and role permissions, secret rejection, request limits, grid geometry, Claude, Codex and Copilot hook reporting through the helper/service, and extension indicators. The second checks source/helper/security-script syntax.
+The first command tests persistence, migrations, interrupted writes, explicit stale-lock recovery, single-writer protection, read-only views, compaction, corrupt-state handling, board acknowledgement and archive isolation, authentication and role permissions, secret rejection, request limits, grid geometry, Claude, Codex and Copilot hook reporting through the helper/service, and extension indicators. The second checks source/helper/security-script syntax.
 
 The VS Code integration test needs a graphical desktop and `code` on PATH (override with `VSCODE_CLI`; add launch flags such as `--no-sandbox` with `VSCODE_ARGS`). CI runs it under Xvfb. It launches an isolated temporary profile and project, checks real terminal tabs and groups, balanced pane sizes through nine groups with a one-second settle limit, tenth-agent tab fallback, maximise/restore, read-only second-window takeover, persisted attention, and removal of a group while keeping its neighbour. Set `MURMURPLEX_TEST_LOAD=N` to add N busy processes during the test; they stop when the runner finishes. It leaves its temporary logs for diagnosis and does not use your normal VS Code profile. These checks do not replace interactive provider or devcontainer rebuild validation.
+
+The notice board integration test needs Chromium (`chromium` on PATH, or `CHROMIUM_CLI`); optional launch flags use `CHROMIUM_ARGS`. It uses a temporary browser profile and a real localhost service, checks human posting, one-second refresh without losing drafts, directed-request acknowledgement, and text-only rendering of HTML-like posts. The profile is removed afterwards. It does not test devcontainer forwarding or rebuilds.
 
 ## Architecture
 
@@ -224,7 +235,8 @@ The VS Code integration test needs a graphical desktop and `code` on PATH (overr
 - `src/copilot.js` and `copilot-plugin/`: Copilot lifecycle/attention adapter and the bundled hook plugin.
 - `src/codex.js` and `src/codex-trust.js`: Codex launch-time hook definitions, lifecycle/attention adapter, and hook trust detection through `codex app-server`.
 - `src/service.js`: authenticated loopback API, bound to the workspace extension lifecycle.
-- `src/store.js`: atomic persistent project state, roles, tasks, decisions and mailbox.
-- `bin/murmurplex-agent`: agent-facing mailbox and state helper.
+- `src/store.js`: atomic persistent project state, roles, tasks, decisions, shared board and read-only legacy archive.
+- `src/board.js` and `web/`: board validation and the authenticated localhost browser UI.
+- `bin/murmurplex-agent`: agent-facing board and state helper.
 
 The service is intentionally independent of VS Code APIs so its storage and messaging behaviour can be tested separately and later moved into a standalone process if background operation is needed.

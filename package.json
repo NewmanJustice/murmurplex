@@ -30,8 +30,9 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check src/extension.js && node --check src/service.js && node --check src/store.js && node --check src/security.js && node --check src/migrations.js && node --check src/repository.js && node --check src/claude.js && node --check src/codex.js && node --check src/codex-trust.js && node --check src/copilot.js && node --check bin/murmurplex-agent && node --check scripts/scan-secrets.js && node --check scripts/install-security-hook.js && node --check scripts/enable-github-protection.js",
+    "check": "node --check src/extension.js && node --check src/service.js && node --check src/store.js && node --check src/security.js && node --check src/migrations.js && node --check src/board.js && node --check web/board-client.js && node --check test/board.integration.js && node --check src/repository.js && node --check src/claude.js && node --check src/codex.js && node --check src/codex-trust.js && node --check src/copilot.js && node --check bin/murmurplex-agent && node --check scripts/scan-secrets.js && node --check scripts/install-security-hook.js && node --check scripts/enable-github-protection.js",
     "test:vscode": "node scripts/test-vscode.js",
+    "test:board": "node --test test/board.integration.js",
     "security:scan": "node scripts/scan-secrets.js history",
     "security:staged": "node scripts/scan-secrets.js staged",
     "security:files": "node scripts/scan-secrets.js files",
@@ -78,8 +79,8 @@
         "title": "Murmurplex: Refresh Repository State"
       },
       {
-        "command": "murmurplex.message",
-        "title": "Murmurplex: Send Agent Message"
+        "command": "murmurplex.board",
+        "title": "Murmurplex: Open Notice Board"
       },
       {
         "command": "murmurplex.attention",

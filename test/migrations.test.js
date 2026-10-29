@@ -35,7 +35,8 @@ test('a version 1 project is migrated, backed up once, and keeps its records', t
   const state = store.snapshot();
   store.close();
   assert.equal(state.version, CURRENT_VERSION);
-  assert.equal(state.messages.length, 1);
+  assert.equal(state.legacyMessages.length, 1);
+  assert.deepEqual(state.posts, []);
   assert.equal(state.agents[0].claude.requests.length, 1, 'outstanding requests survive migration');
   assert.equal(state.agents[0].attention, 'needs-input');
   assert.equal(state.agents[1].attention, null);
@@ -116,7 +117,7 @@ test('version 5 messages gain nullable task links without losing acknowledgement
   });
   const { root, file, raw } = project(t, legacy);
   const store = new Store(root);
-  assert.deepEqual(store.snapshot().messages, legacy.messages.map(message => ({ ...message, taskId: null })));
+  assert.deepEqual(store.snapshot().legacyMessages, legacy.messages.map(message => ({ ...message, taskId: null })));
   store.close();
   assert.equal(fs.readFileSync(`${file}.v5.bak`, 'utf8'), raw);
 });
@@ -138,11 +139,11 @@ test('newer, malformed or inconsistent state is refused and left untouched', t =
     'missing message task field': v1({ version: CURRENT_VERSION, messages: [{ id: 'm' }] }),
     'invalid task branch': v1({ tasks: [{ id: 'task', branch: 'bad\nbranch', worktreePath: null }] }),
     'missing task reference fields': v1({ version: CURRENT_VERSION, tasks: [{ id: 'task' }] }),
-    'missing task dependency': v1({ version: CURRENT_VERSION, tasks: [{
+    'missing task dependency': v1({ version: 6, tasks: [{
       id: 'task-1', ownerId: null, branch: null, worktreePath: null, priority: 'normal',
       acceptanceCriteria: [], dependsOn: ['missing'], progress: '', blocker: null, nextAction: ''
     }] }),
-    'cyclic task dependencies': v1({ version: CURRENT_VERSION, tasks: [
+    'cyclic task dependencies': v1({ version: 6, tasks: [
       { id: 'task-1', ownerId: null, branch: null, worktreePath: null, priority: 'normal', acceptanceCriteria: [], dependsOn: ['task-2'], progress: '', blocker: null, nextAction: '' },
       { id: 'task-2', ownerId: null, branch: null, worktreePath: null, priority: 'normal', acceptanceCriteria: [], dependsOn: ['task-1'], progress: '', blocker: null, nextAction: '' }
     ] }),
