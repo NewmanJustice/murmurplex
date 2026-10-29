@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { Store } = require('../src/store');
 const { startService } = require('../src/service');
 const { claudeSettings } = require('../src/claude');
+const repository = require('../src/repository');
 
 function project() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'murmurplex-claude-'));
@@ -158,6 +159,8 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   const disposable = { dispose() {} };
   const status = { show() {}, dispose() {} };
   let provider;
+  let repositoryProvider;
+  let inspect = repository.inspectRepository;
   let selectedAgent;
   let handover;
   let inheritAuthentication = false;
@@ -186,7 +189,11 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
       tabGroups: { all: [group], activeTabGroup: group, onDidChangeTabGroups: () => disposable, onDidChangeTabs: () => disposable },
       createOutputChannel: () => ({ appendLine() {}, dispose() {} }),
       createStatusBarItem: () => status,
-      registerTreeDataProvider(name, value) { provider = value; return disposable; },
+      registerTreeDataProvider(name, value) {
+        if (name === 'murmurplex.agents') provider = value;
+        if (name === 'murmurplex.repository') repositoryProvider = value;
+        return disposable;
+      },
       onDidCloseTerminal: () => disposable,
       showErrorMessage: message => errors.push(message),
       showInformationMessage() {},
@@ -203,7 +210,11 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   const load = Module._load;
   let extension;
   try {
-    Module._load = function (name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
+    Module._load = function (name, ...args) {
+      if (name === 'vscode') return vscode;
+      if (name === './repository') return { inspectRepository: (...inspectArgs) => inspect(...inspectArgs) };
+      return load.call(this, name, ...args);
+    };
     extension = require('../src/extension');
   } finally { Module._load = load; }
   const context = { subscriptions: [], extensionPath: path.resolve(__dirname, '..'), globalStorageUri: { fsPath: storage } };
@@ -284,5 +295,16 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   inheritAuthentication = true;
   await commands.get('murmurplex.addTab')({ kind: 'shell', name: 'Compatibility login' });
   assert.equal(vscode.window.terminals.at(-1).options.env.OPENAI_API_KEY, undefined, 'compatibility mode does not delete provider credentials');
+
+  const pending = [];
+  inspect = () => new Promise(resolve => pending.push(resolve));
+  const olderRefresh = commands.get('murmurplex.refreshRepository')();
+  const newerRefresh = commands.get('murmurplex.refreshRepository')();
+  assert.equal(pending.length, 2);
+  pending[1]({ root, branch: 'newer', head: 'new-head', changes: [], worktrees: [] });
+  await newerRefresh;
+  pending[0]({ root, branch: 'older', head: 'old-head', changes: [], worktrees: [] });
+  await olderRefresh;
+  assert.equal(repositoryProvider.getChildren().find(item => item.label === 'Branch').description, 'newer');
   assert.deepEqual(errors, []);
 });

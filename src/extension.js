@@ -8,6 +8,7 @@ const { gridLayout } = require('./layout');
 const { claudeSettings } = require('./claude');
 const { codexConfigArgs } = require('./codex');
 const { codexHookTrust } = require('./codex-trust');
+const { inspectRepository } = require('./repository');
 const { redact, authenticationEnvironment } = require('./security');
 let active;
 
@@ -16,7 +17,7 @@ function activate(context) {
   const terminals = new Map();
   const output = vscode.window.createOutputChannel('Murmurplex');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  let service, root, starting, balancing = false, timer, enabled = false, disposed = false, maximized, viewer, viewerWatch, viewerTimer;
+  let service, root, starting, balancing = false, timer, enabled = false, disposed = false, maximized, viewer, viewerWatch, viewerTimer, repositoryState, repositoryRefresh = 0;
   const state = () => service?.store.snapshot() || viewer?.snapshot();
   const refresh = () => {
     change.fire();
@@ -42,7 +43,59 @@ function activate(context) {
       return item;
     }
   };
-  context.subscriptions.push(change, output, status, vscode.window.registerTreeDataProvider('murmurplex.agents', provider));
+  const repositoryChange = new vscode.EventEmitter();
+  const repositoryProvider = {
+    onDidChangeTreeData: repositoryChange.event,
+    getChildren(element) {
+      if (element) return element.children || [];
+      if (!repositoryState) return [{ label: 'Start or Resume Project to inspect Git state.', command: 'murmurplex.start' }];
+      if (repositoryState.loading) return [{ label: 'Inspecting repository…' }];
+      if (repositoryState.error) return [{ label: 'Git state could not be inspected', description: repositoryState.error }];
+      const observed = repositoryState;
+      const children = [
+        observed.changes.length
+          ? { label: `Working tree changes (${observed.changes.length})`, children: observed.changes.map(change => ({ label: change.path, description: change.status })) }
+          : { label: 'Working tree', description: 'clean' },
+        { label: 'Worktrees', description: String(observed.worktrees.length), children: observed.worktrees.map(worktree => ({
+          label: worktree.path,
+          description: [worktree.current ? 'current' : '', worktree.branch || (worktree.detached ? 'detached' : ''), worktree.locked ? 'locked' : '', worktree.prunable ? 'prunable' : ''].filter(Boolean).join(' · ')
+        })) }
+      ];
+      return [
+        { label: 'Repository root', description: observed.root },
+        { label: 'Branch', description: observed.branch || 'detached HEAD' },
+        { label: 'HEAD', description: observed.head || '(no commits)' },
+        ...children
+      ];
+    },
+    getTreeItem(element) {
+      const item = new vscode.TreeItem(element.label, element.children ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+      item.description = element.description;
+      if (element.command) item.command = { command: element.command, title: 'Start or Resume Project' };
+      return item;
+    }
+  };
+  context.subscriptions.push(change, repositoryChange, output, status,
+    vscode.window.registerTreeDataProvider('murmurplex.agents', provider),
+    vscode.window.registerTreeDataProvider('murmurplex.repository', repositoryProvider));
+  async function refreshRepositoryState(notify = false) {
+    if (!root) throw new Error('Start or Resume Project before refreshing repository state.');
+    const refreshId = ++repositoryRefresh;
+    repositoryState = { loading: true };
+    repositoryChange.fire();
+    try {
+      const observed = await inspectRepository(root);
+      if (refreshId !== repositoryRefresh) return;
+      repositoryState = observed;
+    }
+    catch (error) {
+      if (refreshId !== repositoryRefresh) return;
+      repositoryState = { error: redact(error.message) };
+      output.appendLine(`Repository inspection failed: ${repositoryState.error}`);
+      if (notify) vscode.window.showErrorMessage(`Murmurplex could not inspect Git state: ${repositoryState.error}`);
+    }
+    repositoryChange.fire();
+  }
   function stopViewing() {
     viewerWatch?.close(); clearTimeout(viewerTimer);
     viewer = viewerWatch = viewerTimer = undefined;
@@ -84,6 +137,7 @@ function activate(context) {
         if (error.code !== 'PROJECT_LOCKED') throw error;
         output.appendLine(redact(error.message));
         startViewing(path.join(root, '.murmurplex'));
+        await refreshRepositoryState();
         vscode.window.showWarningMessage(`This project is open in another Murmurplex window or container, so this window is read-only. ${error.message}`, 'Recover Stale Project Lock')
           .then(choice => { if (choice) vscode.commands.executeCommand('murmurplex.recoverLock'); });
         return;
@@ -105,6 +159,7 @@ function activate(context) {
       if (legacyTerminal) vscode.window.showWarningMessage('Murmurplex credential storage has moved outside the project. Close old Murmurplex terminals, then use Resume Saved Agent to restore reporting.');
       enabled = true; refresh();
       output.appendLine(`Project service started for ${root}. Per-agent credentials are kept outside the project in VS Code extension storage.`);
+      await refreshRepositoryState();
       return service;
     })();
     try { return await starting; } finally { starting = undefined; }
@@ -226,6 +281,7 @@ function activate(context) {
     output.appendLine(`Removed writer lock held by ${owner.description}.`);
     vscode.window.showInformationMessage('Lock removed. Start or resume the project again.');
   });
+  register('refreshRepository', async () => refreshRepositoryState(true));
   register('maximize', toggleMaximize);
   register('balance', async () => { if (await ensure()) await balance(); });
   register('coordinator', async () => {
@@ -278,9 +334,9 @@ function activate(context) {
     }),
     vscode.window.tabGroups.onDidChangeTabGroups(scheduleBalance),
     vscode.window.tabGroups.onDidChangeTabs(scheduleBalance),
-    { dispose() { disposed = true; enabled = false; clearTimeout(timer); stopViewing(); } }
+    { dispose() { disposed = true; enabled = false; ++repositoryRefresh; clearTimeout(timer); stopViewing(); } }
   );
-  active = { async close() { disposed = true; enabled = false; clearTimeout(timer); stopViewing(); if (starting) await starting; if (service) { await service.close(); service = undefined; } } };
+  active = { async close() { disposed = true; enabled = false; ++repositoryRefresh; clearTimeout(timer); stopViewing(); if (starting) await starting; if (service) { await service.close(); service = undefined; } } };
 }
 async function deactivate() { await active?.close(); }
 module.exports = { activate, deactivate };

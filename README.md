@@ -32,6 +32,7 @@ code --new-window --extensionDevelopmentPath=/absolute/path/to/murmurplex /absol
 | --- | --- |
 | Start or Resume Project | Starts the local service and loads the project record; launches the first agent on a new project. |
 | Recover Stale Project Lock | After confirming all project services are stopped, removes the unchanged writer lock. Does not remove a crashed writer-operation guard. |
+| Refresh Repository State | Re-reads the current branch, `HEAD`, working-tree changes and worktrees without changing Git or Murmurplex state. |
 | Add Agent Terminal Group | Adds an agent in a new visible editor group. |
 | Add Agent Tab to Current Group | Adds another agent tab in the focused group. |
 | Balance Terminal Grid | Gives editor panes equal area. |
@@ -43,6 +44,8 @@ code --new-window --extensionDevelopmentPath=/absolute/path/to/murmurplex /absol
 | Set Agent Attention State | Exercises the attention indicator or explicitly resolves it. |
 
 All command names begin with **Murmurplex:** in VS Code.
+
+When a project starts or resumes, the **Repository** Explorer view shows a read-only observation of its current Git branch, `HEAD`, working-tree changes and worktrees alongside the saved Murmurplex project record. Refresh it with **Murmurplex: Refresh Repository State** after Git state changes. Failed Git inspection is shown explicitly as unverified. These observations are not persisted, do not reconcile or repair saved records, and do not imply that prior agent work is still running or complete.
 
 ### Mailbox and project record
 
