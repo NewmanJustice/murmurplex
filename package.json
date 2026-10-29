@@ -57,12 +57,20 @@
         "title": "Murmurplex: Balance Terminal Grid"
       },
       {
+        "command": "murmurplex.maximize",
+        "title": "Murmurplex: Maximize or Restore Terminal Group"
+      },
+      {
         "command": "murmurplex.coordinator",
         "title": "Murmurplex: Change Coordinator"
       },
       {
         "command": "murmurplex.brief",
         "title": "Murmurplex: Copy Project Handover"
+      },
+      {
+        "command": "murmurplex.recoverLock",
+        "title": "Murmurplex: Recover Stale Project Lock"
       },
       {
         "command": "murmurplex.message",

@@ -3,6 +3,7 @@ const vscode = require('vscode');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { startService } = require('./service');
+const { Store } = require('./store');
 const { gridLayout } = require('./layout');
 const { claudeSettings } = require('./claude');
 const { codexConfigArgs } = require('./codex');
@@ -15,16 +16,16 @@ function activate(context) {
   const terminals = new Map();
   const output = vscode.window.createOutputChannel('Murmurplex');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  let service, root, starting, balancing = false, timer, enabled = false, disposed = false;
-  const state = () => service?.store.snapshot();
+  let service, root, starting, balancing = false, timer, enabled = false, disposed = false, maximized, viewer, viewerWatch, viewerTimer;
+  const state = () => service?.store.snapshot() || viewer?.snapshot();
   const refresh = () => {
     change.fire();
     const snapshot = state();
     if (!snapshot) return;
     const waiting = snapshot.agents.filter(a => a.attention).length;
-    status.text = waiting ? `$(circle-filled) Murmurplex · ${waiting} waiting` : '$(terminal) Murmurplex';
+    status.text = viewer ? `$(eye) Murmurplex · read-only${waiting ? ` · ${waiting} waiting` : ''}` : waiting ? `$(circle-filled) Murmurplex · ${waiting} waiting` : '$(terminal) Murmurplex';
     status.color = waiting ? new vscode.ThemeColor('notificationsWarningIcon.foreground') : undefined;
-    status.tooltip = waiting ? snapshot.agents.filter(a => a.attention).map(a => `${a.name}: ${a.attention}`).join('\n') : 'Murmurplex project agents';
+    status.tooltip = viewer ? 'Read-only view: another window or container owns this project. Run Start or Resume Project to take over once it closes.' : waiting ? snapshot.agents.filter(a => a.attention).map(a => `${a.name}: ${a.attention}`).join('\n') : 'Murmurplex project agents';
     status.command = 'murmurplex.openAgent'; status.show();
   };
   const provider = {
@@ -42,6 +43,25 @@ function activate(context) {
     }
   };
   context.subscriptions.push(change, output, status, vscode.window.registerTreeDataProvider('murmurplex.agents', provider));
+  function stopViewing() {
+    viewerWatch?.close(); clearTimeout(viewerTimer);
+    viewer = viewerWatch = viewerTimer = undefined;
+  }
+  function startViewing(directory) {
+    stopViewing();
+    try { viewer = Store.readOnly(directory); }
+    catch (error) { output.appendLine(redact(error.message)); return; }
+    // Writes are atomic renames, so watching the directory catches every committed change.
+    const reload = () => {
+      clearTimeout(viewerTimer);
+      viewerTimer = setTimeout(() => {
+        try { viewer?.reload(); refresh(); } catch (error) { output.appendLine(redact(error.message)); }
+      }, 200);
+    };
+    try { viewerWatch = require('node:fs').watch(directory, (event, name) => { if (name === 'state.json') reload(); }); }
+    catch (error) { output.appendLine(redact(error.message)); }
+    refresh();
+  }
   async function ensure() {
     if (service) return service;
     if (starting) return starting;
@@ -59,7 +79,16 @@ function activate(context) {
       if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`)) {
         throw new Error('Murmurplex credential storage must be outside the project directory.');
       }
-      service = await startService(path.join(root, '.murmurplex'), credentialsDirectory, refresh);
+      try { service = await startService(path.join(root, '.murmurplex'), credentialsDirectory, refresh); }
+      catch (error) {
+        if (error.code !== 'PROJECT_LOCKED') throw error;
+        output.appendLine(redact(error.message));
+        startViewing(path.join(root, '.murmurplex'));
+        vscode.window.showWarningMessage(`This project is open in another Murmurplex window or container, so this window is read-only. ${error.message}`, 'Recover Stale Project Lock')
+          .then(choice => { if (choice) vscode.commands.executeCommand('murmurplex.recoverLock'); });
+        return;
+      }
+      stopViewing();
       if (disposed) { await service.close(); service = undefined; return; }
       // Reconnect terminals VS Code restored. Their names include stable IDs.
       let legacyTerminal = false;
@@ -84,11 +113,23 @@ function activate(context) {
     const count = vscode.window.tabGroups.all.length;
     if (balancing || !enabled || count < 1 || count > 9) return;
     balancing = true;
-    try { await vscode.commands.executeCommand('vscode.setEditorLayout', gridLayout(count)); }
+    try { await vscode.commands.executeCommand('vscode.setEditorLayout', gridLayout(count)); maximized = undefined; }
     finally { balancing = false; }
   }
+  // Terminal tabs can briefly report an unknown input type, so only recognised document editors count as source editors.
+  const documentInputs = ['TabInputText', 'TabInputTextDiff', 'TabInputCustom', 'TabInputNotebook', 'TabInputNotebookDiff'].map(name => vscode[name]).filter(Boolean);
+  const sourceEditorsOpen = () => vscode.window.tabGroups.all.some(group => group.tabs.some(tab => documentInputs.some(type => tab.input instanceof type)));
+  // VS Code exposes no readable maximised state, and layout sizes lag behind commands, so this avoids the native
+  // toggle: minimising the other groups and rebalancing are each harmless to repeat, which makes a stale flag benign.
+  async function toggleMaximize() {
+    if (!await ensure()) return;
+    if (maximized) { maximized = undefined; return balance(); }
+    await vscode.commands.executeCommand('workbench.action.minimizeOtherEditors');
+    maximized = vscode.window.tabGroups.all.length;
+  }
   function scheduleBalance() {
-    if (balancing || !enabled || !vscode.workspace.getConfiguration('murmurplex').get('autoBalance', true)) return;
+    if (maximized && maximized !== vscode.window.tabGroups.all.length) maximized = undefined;
+    if (balancing || maximized || !enabled || sourceEditorsOpen() || !vscode.workspace.getConfiguration('murmurplex').get('autoBalance', true)) return;
     clearTimeout(timer);
     timer = setTimeout(() => balance().catch(error => output.appendLine(redact(error.message))), 150);
   }
@@ -116,7 +157,8 @@ function activate(context) {
     if (!name) return;
     const groups = vscode.window.tabGroups.all;
     const reuseEmpty = groups.length === 1 && groups[0].tabs.length === 0;
-    if (newGroup && !reuseEmpty && groups.length >= 9) throw new Error('The prototype supports up to nine editor groups. Add a tab to an existing group instead.');
+    // Nine groups is the grid limit, so further agents become tabs in the focused group.
+    const asGroup = newGroup && !reuseEmpty && groups.length < 9;
     const agent = existing || service.store.register({ kind, name });
     service.issueCredential(agent.id);
     const coordinator = agent.id === state().coordinatorId;
@@ -139,7 +181,7 @@ function activate(context) {
         } : {}),
         iconPath: new vscode.ThemeIcon(coordinator ? 'star-full' : 'terminal'),
         ...(coordinator ? { color: new vscode.ThemeColor('terminal.ansiCyan') } : {}),
-        location: { viewColumn: newGroup && !reuseEmpty ? groups.length + 1 : vscode.window.tabGroups.activeTabGroup.viewColumn },
+        location: { viewColumn: asGroup ? groups.length + 1 : vscode.window.tabGroups.activeTabGroup.viewColumn },
         message: `Murmurplex ${coordinator ? 'coordinator' : 'worker'} · ${name}\r\nMailbox: murmurplex-agent help · Use “Copy Project Handover” for agent context.\r\n`
       });
       terminals.set(agent.id, terminal); terminal.show();
@@ -166,6 +208,25 @@ function activate(context) {
     if (terminal && vscode.window.terminals.includes(terminal)) terminal.show();
     else await addAgent(false, { agentId: agent.id });
   });
+  register('recoverLock', async () => {
+    if (!vscode.workspace.isTrusted) throw new Error('Trust the workspace before recovering a project lock.');
+    if (service) { vscode.window.showInformationMessage('This window already owns the project; there is no stale lock to recover.'); return; }
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders?.length) throw new Error('Open a project folder first.');
+    const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: 'Choose the project whose lock to recover' });
+    if (!folder) return;
+    if (folder.uri.scheme !== 'file') throw new Error('Murmurplex needs a filesystem workspace, such as a local folder or devcontainer.');
+    const directory = path.join(folder.uri.fsPath, '.murmurplex');
+    const owner = Store.lockOwner(directory);
+    if (!owner) { vscode.window.showInformationMessage('No writer lock is present.'); return; }
+    const choice = await vscode.window.showWarningMessage(`The project lock is held by ${owner.description}. Remove it only if no Murmurplex service is running for this project, including in other windows or containers.`, { modal: true }, 'Remove Lock');
+    if (choice !== 'Remove Lock') return;
+    if (service || starting) throw new Error('Project startup occurred during confirmation. Retry recovery only after stopping the project service.');
+    Store.breakLock(directory, owner);
+    output.appendLine(`Removed writer lock held by ${owner.description}.`);
+    vscode.window.showInformationMessage('Lock removed. Start or resume the project again.');
+  });
+  register('maximize', toggleMaximize);
   register('balance', async () => { if (await ensure()) await balance(); });
   register('coordinator', async () => {
     const agent = await selectAgent('Choose the new coordinator; project state stays with this project');
@@ -217,9 +278,9 @@ function activate(context) {
     }),
     vscode.window.tabGroups.onDidChangeTabGroups(scheduleBalance),
     vscode.window.tabGroups.onDidChangeTabs(scheduleBalance),
-    { dispose() { disposed = true; enabled = false; clearTimeout(timer); } }
+    { dispose() { disposed = true; enabled = false; clearTimeout(timer); stopViewing(); } }
   );
-  active = { async close() { disposed = true; enabled = false; clearTimeout(timer); if (starting) await starting; if (service) { await service.close(); service = undefined; } } };
+  active = { async close() { disposed = true; enabled = false; clearTimeout(timer); stopViewing(); if (starting) await starting; if (service) { await service.close(); service = undefined; } } };
 }
 async function deactivate() { await active?.close(); }
 module.exports = { activate, deactivate };

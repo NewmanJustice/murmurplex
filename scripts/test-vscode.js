@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+// MURMURPLEX_TEST_LOAD=N runs N busy processes to measure layout settling under CPU load.
+const burners = Array.from({ length: Number(process.env.MURMURPLEX_TEST_LOAD) || 0 }, () => spawn(process.execPath, ['-e', 'for(;;);'], { stdio: 'ignore' }));
+const stopBurners = () => burners.forEach(burner => burner.kill());
 async function main() {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'murmurplex-vscode-'));
   const workspace = path.join(temporary, 'project');
@@ -33,4 +36,4 @@ async function main() {
   }
   throw new Error(`VS Code test timed out. Inspect ${temporary}`);
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+main().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(stopBurners);

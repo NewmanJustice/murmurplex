@@ -161,6 +161,7 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   let selectedAgent;
   let handover;
   let inheritAuthentication = false;
+  let confirmRecovery = async () => undefined;
   const group = { viewColumn: 1, tabs: [] };
   class UIValue { constructor(value) { this.value = value; } }
   const vscode = {
@@ -189,6 +190,7 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
       onDidCloseTerminal: () => disposable,
       showErrorMessage: message => errors.push(message),
       showInformationMessage() {},
+      showWarningMessage: (...args) => confirmRecovery(...args),
       async showQuickPick(items) { return items.find(item => item.agent.id === selectedAgent); },
       createTerminal(options) {
         const terminal = { name: options.name, options, creationOptions: options, show() { vscode.window.activeTerminal = terminal; } };
@@ -211,6 +213,26 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(storage, { recursive: true, force: true });
   });
+  const directory = path.join(root, '.murmurplex');
+  fs.mkdirSync(directory);
+  const lock = path.join(directory, 'writer.lock');
+  fs.writeFileSync(lock, '1234\n');
+  await commands.get('murmurplex.recoverLock')();
+  assert.equal(fs.readFileSync(lock, 'utf8'), '1234\n', 'cancel must preserve the lock');
+  let replacement;
+  confirmRecovery = async () => {
+    fs.unlinkSync(lock);
+    replacement = new Store(directory);
+    return 'Remove Lock';
+  };
+  await commands.get('murmurplex.recoverLock')();
+  assert.match(errors.pop(), /lock changed since confirmation/);
+  assert.equal(Store.lockOwner(directory).raw, replacement.owner.raw);
+  replacement.close();
+  fs.writeFileSync(lock, '1234\n');
+  confirmRecovery = async () => 'Remove Lock';
+  await commands.get('murmurplex.recoverLock')();
+  assert.equal(fs.existsSync(lock), false);
   const agent = await commands.get('murmurplex.addTab')({ kind: 'claude', name: 'Claude' });
   assert.ok(agent?.id, errors.join('\n'));
   const terminal = vscode.window.terminals[0];

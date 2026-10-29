@@ -1,8 +1,8 @@
 # Murmurplex implementation plan
 
-Status: proposed delivery plan, based on the current prototype. Release scope and
-decision gates below need the project owner's agreement.
-Last updated: 27 October 2026.
+Status: delivery plan with release scope and decisions agreed below. Remaining
+acceptance thresholds and provider capability questions are called out explicitly.
+Last updated: 29 October 2026.
 
 [SPECIFICATION.md](SPECIFICATION.md) defines the product requirements; this plan
 sequences them and does not relax them. [README.md](README.md) describes what can
@@ -12,16 +12,25 @@ be used today.
 
 | Area | Implemented | Not yet complete |
 | --- | --- | --- |
-| Terminal workspace | Native editor groups, agent tabs, automatic grid balancing, passing graphical validation. | Maximise/restore, isolation from source-editor groups. |
+| Terminal workspace | Native editor groups, agent tabs, automatic grid balancing, maximise/restore, tenth-agent-as-tab, read-only second-window view, passing graphical validation for one to nine groups. | Isolation from source-editor groups and tab-level indicators (no VS Code API); devcontainer settle timing. |
 | Lifecycle and attention | Claude, Codex and Copilot hook adapters, persistent requests, quiet Explorer/status-bar indicators, manual fallback. | Copilot permission prompts, Codex questions, unsupported Claude prompts, tab/group indicators. |
-| Project record | Atomic writes, single writer, agents, coordinator identity, basic tasks, decisions, mailbox, versioned schema with tested migrations and backups. | Crash recovery, richer records, reconciliation, bounded growth. |
-| Coordination | Saved coordinator selection, copyable handover. | Enforced authority, active handover, automatic delivery and wakeup. |
+| Project record | Atomic writes, single writer, agents, coordinator identity, basic tasks, decisions, mailbox, versioned schema with tested migrations/backups, explicit stale-lock recovery, interrupted-write coverage and initial compaction. | Richer records, reconciliation, archival/completed-task retention, devcontainer recovery; crashed operation guards still require offline manual removal. No power-loss durability guarantee. |
+| Coordination | Saved coordinator selection, recipient-filtered copyable handover, per-agent credentials and enforced coordinator/worker permissions. | Configurable assignment authority, interruption-safe active handover, delivery tracking, automatic delivery and wakeup. |
 | PR workflow | Handover text asks agents to verify state and get approval. | PR/review tracking, controlled merging, approval UI. |
 | Engineering | Node tests, syntax check, graphical test script, GitHub Actions CI (Node 20/22, Xvfb VS Code test). | No packaging, no compatibility testing against provider CLI versions. |
 
-Validation recorded during the Claude integration (observations, not guarantees):
+Validation as of 29 October 2026 (observations, not guarantees):
 
-- All 12 Node tests and syntax checks passed.
+- All 43 Node tests, syntax checks, working-file secret scanning and the scanner
+  integration test passed locally.
+- The expanded graphical test passed locally, including one-to-nine-group
+  layout coverage, tenth-agent tab fallback, maximise/restore and read-only
+  second-window takeover. It now waits for the worker terminal's tab and focus
+  before adding a tab to that group, rather than assuming a group-open event
+  means the terminal is ready.
+- [CI run 40601270098](https://github.com/NewmanJustice/murmurplex/actions/runs/40601270098)
+  passed secret checks, Node 20/22 tests and the Xvfb graphical job for
+  `3740798`. The expanded local changes are not yet verified by CI.
 - Claude Code 2.1.311 executed startup/shutdown hooks without a model request.
 - The graphical test originally failed its equal-pane assertion; unchanged `HEAD`
   failed identically. **Resolved:** on VS Code 1.143.1 the layout reads as a
@@ -53,7 +62,7 @@ Validation recorded during the Claude integration (observations, not guarantees)
 - Ship small increments with focused tests and updated README/specification
   status.
 
-## Proposed release scope
+## Agreed release scope
 
 The specification's five acceptance scenarios remain the bar for the finished
 product, but they should not all gate the first release.
@@ -72,20 +81,45 @@ These are small and time-boxed. They change later designs, so decide them first.
 
 1. **Layout failure diagnosis (done).** The failure was a test timing artifact:
    the test read the layout before VS Code settled it. The test now waits for
-   the settled layout. Still to do under milestone 1: measure settle time under
-   load and in a devcontainer.
-2. **Provider capability matrix.** For Claude, Codex CLI and Copilot CLI, using
-   official documentation and installed versions, record supported events for
-   start, work, question, permission, resolution, completion, failure and exit;
-   conversation resumption; and safe message delivery/wakeup. Record minimum
-   supported versions.
-3. **VS Code UI options.** Establish what native terminals/editor groups can and
-   cannot do for source-editor isolation, hidden-tab indicators, coordinator
-   placement and live restyling. Decide, with the owner, whether native groups
-   are sufficient before milestone 1 invests in them.
-4. **State schema versioning and migrations.** The Claude adapter already added
-   `agent.claude` while `version` is still 1. Introduce a versioned schema,
-   validation and tested migrations before any further record changes.
+    the settled layout. Local load measurements are recorded under milestone 1;
+    devcontainer measurements remain.
+2. **Provider capability matrix (partial).** Installed-version hook capabilities
+    and launch/trust behaviour are recorded below. Interactive validation,
+    conversation resumption and safe message delivery/wakeup remain incomplete.
+    Latest stable CLIs are the agreed support target; automated compatibility
+    checks are not yet implemented.
+3. **VS Code UI options (done; native groups accepted by owner).** Checked against
+   the VS Code 1.143 API typings and a throwaway spike in a real VS Code host.
+   - *Source-editor isolation:* none for editor-area terminals. Terminals and
+     source files share one editor grid (`vscode.setEditorLayout` and
+     `tabGroups.all` cover both), so balancing resizes source groups too.
+     Panel terminals (`TerminalLocation.Panel`, splits via `parentTerminal`) are
+     outside the editor grid and do not appear in `tabGroups`, but the panel has
+     one split-group model, so it does not map directly onto "groups with tabs".
+   - *Hidden-tab indicators:* no API decorates a terminal tab.
+     `registerFileDecorationProvider` applies to resource URIs only and `Tab`
+     exposes no badge. Hidden-tab attention is limited to the aggregate Explorer
+     tree and status bar, which work today, or a label prefix (below).
+   - *Live restyling:* `iconPath`, `color` and `name` are fixed at creation.
+     `workbench.action.terminal.renameWithArg {name}` renames the active terminal
+     live (verified: `terminal.name` and the tab label update, and `[id]` in the
+     name still allows reconnection). A hidden tab must be activated first, which
+     changes the visible tab, so it is not suitable for background attention.
+     Icon and colour changes (`changeIcon`, `changeColor`) are interactive pickers
+     with no argument form. So coordinator styling is creation-time only, and a
+     coordinator change cannot restyle existing tabs.
+   - *Coordinator placement:* possible at creation via `viewColumn` (a column or
+     `Beside`, up to nine); there is no API to pin or lock a group.
+   Recommendation: native groups suffice for v0.1 if attention stays in the
+   Explorer and status bar, the isolation gap is documented, and balancing is
+   scoped (for example, skipped when source editors are open). Revisit a
+   webview or pseudoterminal design only if hidden-tab indicators become a
+   release requirement. Owner accepted native groups on 2026-10-28.
+4. **State schema versioning and migrations (done).** State is version 2.
+   Version 1 migrates in memory with validation and a one-time original-file
+   backup before writing. Newer or invalid state is refused untouched. Tests
+   cover migration, backups and refusal; future state-shape changes require a
+   new migration and version bump.
 5. **Per-agent credentials (done).** Token hashes are held in memory; plaintext
    tokens are delivered in 0600 files in private VS Code extension storage outside
    the checkout, with 0700 credential directories. This is local authentication,
@@ -97,14 +131,12 @@ These are small and time-boxed. They change later designs, so decide them first.
    Pre-commit and CI Gitleaks scans protect this repository; enabling GitHub push
    protection still requires authenticated repository-admin access.
    Process-ancestry identity over a Unix socket is a possible
-   later hardening. Original problem: the shared token gives every local agent full
-   access and allows status spoofing. Introduce per-agent credentials (separate
-   from durable state) so the service can attribute requests, enforce roles,
-   and limit status/hook reporting to the matching agent. Document the remaining
-   same-account trust boundary.
-6. **Continuous integration.** Run Node tests and syntax checks on supported Node
-   versions (20 and 22), and the graphical test under a virtual display. Add
-   scheduled checks against current provider CLI versions where practical.
+   later hardening. Per-agent credentials replace the original shared token;
+   status/hook reporting is limited to the matching identity, within the
+   documented same-account trust boundary.
+6. **Continuous integration (core done).** Secret scans, Node 20/22 tests and
+   syntax checks, and the graphical test under Xvfb are configured and have
+   passed in GitHub Actions. Scheduled provider-CLI compatibility checks remain.
 
 Exit criteria: failure explained and reproducible; capability matrix and UI
 decision recorded; migrations and per-agent credentials tested; CI passing.
@@ -149,6 +181,20 @@ Acceptance (proposed thresholds, to be confirmed):
 - Unavoidable VS Code limitations are listed as unmet requirements, not treated
   as satisfied.
 
+Status: implemented against native groups. Maximise shrinks the other groups
+(`minimizeOtherEditors`) and restore rebalances, so both are safe to repeat; the
+native toggle was rejected because VS Code exposes no maximised state and layout
+sizes lag behind commands, so the state cannot be derived. Automatic balancing
+pauses while source editors are open or a group is maximised. A tenth agent
+opens as a tab. A second window becomes a read-only view of the owner's state
+(`Store.readOnly`, no lock, no writes) with a lock-recovery action, and can take
+over by starting the project once the lock is free. The graphical test covers one
+to nine groups with a one-second settle limit, the read-only window, the tenth
+agent and maximise/restore. Locally, groups settled in under 0.3 s typically and
+under 0.95 s with all 8 cores busy (`MURMURPLEX_TEST_LOAD=N`). Not yet measured
+in a devcontainer. Unmet and documented: source-editor isolation and tab-level
+attention indicators (no VS Code API).
+
 ## 2. Lifecycle coverage
 
 Work:
@@ -175,6 +221,12 @@ Acceptance:
   never produce a finished state the integration cannot establish.
 - Adapter/helper/service tests plus interactive smoke tests in local and
   container environments, with the owner's agreement before paid model calls.
+
+Status: Claude, Copilot and Codex adapters are implemented and covered by
+helper/service tests. Codex requires one-time hook trust. Copilot permissions,
+Codex questions and unsupported Claude prompts remain manual. Conversation
+resumption, full interactive flows and all-provider container validation are
+not complete; implemented adapters do not close this milestone.
 
 ## 3. Durable recovery
 
@@ -207,6 +259,17 @@ Acceptance:
   running or complete.
 - A devcontainer rebuild with persistent state recovers the record without
   surviving agent processes or old credentials.
+
+Status: schema version 2 and migration backups, explicit stale-lock recovery,
+writer-ownership checks, interrupted-write cleanup and initial compaction are
+implemented and tested. Each write retains the newest 500 acknowledged messages
+and 500 decisions, without archival; unacknowledged messages are preserved and
+completed tasks are not compacted. A crash inside a guarded writer operation
+requires offline manual removal of `writer-operation.lock` after stopping all
+project services. Richer records, repository reconciliation, devcontainer
+rebuild validation and a fuller retention policy remain. File data is synced
+before rename, but directory entries are not; power-loss durability is not
+guaranteed.
 
 ## 4. Coordination and delivery
 
@@ -338,13 +401,15 @@ Consequences:
 
 ## Next step
 
-The VS Code UI-options investigation. Per-agent credentials are done (decision
-5): identity and coordinator/worker permissions are enforced per agent.
-State schema versioning is done: version 2, tested migration from version 1,
-validation, one-time backups and refusal of newer state (decision 4). Crash
-recovery and bounded growth remain open. The Claude, Copilot and Codex adapters
-are complete.
-CI (`.github/workflows/ci.yml`) runs syntax checks and unit tests on Node 20 and
-22, plus the graphical test under Xvfb with the latest stable VS Code. The
-graphical job is unverified until its first GitHub run. Provider-CLI
-compatibility checks (decision 3) are not in CI yet.
+Recommended next increment: local repository reconciliation on reopening
+(milestone 3). Read the current branch, HEAD, working-tree changes and worktrees;
+present observed state alongside recovered project records without modifying
+the repository or inferring that saved work is still running or complete.
+Missing Git/repositories and failed inspection must be explicit, and PR state
+must remain unverified until milestone 5. Add focused tests and document the
+recovery behaviour.
+
+Other open v0.1 gates are richer task/recovery records, the remaining retention
+policy, interactive provider validation, devcontainer layout/rebuild recovery,
+provider-CLI compatibility CI, and packaging. Milestone statuses above distinguish
+implemented slices from completed acceptance scenarios.

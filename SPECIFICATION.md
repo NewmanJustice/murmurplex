@@ -1,7 +1,7 @@
 # Murmurplex specification
 
 Status: agreed product direction, with an initial prototype implemented.
-Last updated: 27 October 2026.
+Last updated: 29 October 2026.
 
 This document records the intended product. The implementation status below distinguishes the working prototype from remaining requirements. See [README.md](README.md) for setup and usage.
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the proposed delivery milestones and acceptance gates.
@@ -40,7 +40,7 @@ Required behaviour:
 - Keep the coordinator visually distinct and easy to find.
 - Avoid changing unrelated source-editor arrangements where the eventual UI permits this separation.
 
-The prototype uses native editor groups. Its balance operation affects the whole editor grid in the current window, including groups containing source files. It supports up to nine groups, with additional agents available as tabs. This is a prototype constraint, not a requirement that projects must remain limited to nine agents.
+The prototype uses native editor groups. Its balance operation affects the whole editor grid in the current window, so automatic balancing pauses while source-editor tabs are open or a group is maximised. It supports up to nine groups; further agents open as tabs in the focused group. This is a prototype constraint, not a requirement that projects must remain limited to nine agents.
 
 ## 4. Quiet attention indicators
 
@@ -145,11 +145,12 @@ The prototype uses explicit mailbox commands and inbox polling. Automated delive
 
 | Area | Working prototype | Remaining product requirements |
 | --- | --- | --- |
-| Layout | Native editor terminal groups, multiple tabs, equal-area balancing and automatic rebalancing. | Temporary maximise/restore workflow; finer separation from unrelated source-editor groups. |
-| Agents | Launch installed Claude, Codex, Copilot, or a shell. Reuse a saved agent identity and mailbox. | Provider-specific conversation resumption and lifecycle integration. |
+| Layout | Native editor terminal groups, multiple tabs, equal-area balancing, maximise/restore, and additional agents as tabs after nine groups. Read-only view in a second window. | Separation from source-editor groups (not possible with native groups; automatic balancing pauses instead) and tab-level attention indicators (no VS Code API). |
+| Agents | Launch installed Claude, Codex, Copilot, or a shell. Reuse a saved agent identity and mailbox; provider lifecycle hooks as described below. | Verified provider-specific conversation resumption and interactive/container validation. |
 | Coordinator | Persistent coordinator selection; live visual distinction in Explorer. | Automated delegation, active handover, and updated styling on existing native terminal tabs. |
 | Attention | Launch-scoped Claude hooks for tool questions, tool permissions, and response/session boundaries; Copilot plugin hooks for `ask_user` and response/session boundaries; launch-scoped Codex hooks (after one-time trust) for permission requests, interrupts and response/session boundaries; helper/manual fallback; quiet Explorer and status-bar indicators; unresolved requests survive disconnection. | Copilot permission prompts; Codex questions; unsupported Claude prompts and permission cancellation; indicators on hidden tabs and groups where supported. |
-| Persistence | Atomic file replacement; one writer; saved agents, tasks, decisions, messages, and coordinator role. | Richer backlog metadata, PR/worktree records, automatic reconciliation, and improved abnormal-crash recovery. |
+| Persistence | Atomic file replacement; one writer; versioned schema, validated migrations and backups; explicit stale-lock recovery and interrupted-write tests. Keeps the newest 500 acknowledged messages and 500 decisions, plus all unacknowledged mail. | Richer backlog metadata, PR/worktree records, automatic reconciliation, archival/completed-task retention, and devcontainer recovery validation. An interrupted writer-operation guard requires offline manual removal; power-loss durability is not verified. |
+| Authority | Per-agent credentials outside the checkout; user-only membership/coordinator changes; coordinator-only assignment/decisions; workers update their own tasks and see only their own exchanges. | Configurable assignment authority and interruption-safe active handover. Same-user filesystem and terminal operations are not isolated. |
 | Mailbox | Authenticated loopback API, agent helper, durable messages, explicit acknowledgement. | Task-linked messages, explicit delivery tracking, automatic delivery and idle-agent wakeup. |
 | PRs and merging | Handover instructions ask agents to verify state and obtain approval. | PR discovery, review tracking, merge actions, and enforced configurable merge authority. |
 | Devcontainers | Workspace-side extension/service; development container configuration. | Full end-to-end verification with all three agent CLIs in the user's devcontainer workflow. |
@@ -158,9 +159,9 @@ The README describes operational limitations, including stale-lock recovery and 
 
 ## 10. Delivery sequence
 
-1. Validate the terminal grid, group tabs, local service, and persistent mailbox. This is the current prototype slice.
-2. Integrate agent lifecycle events and quiet attention signals.
-3. Extend persistent task and project records, recovery, and repository reconciliation.
+1. Validate the terminal grid, group tabs, local service, and persistent mailbox. Implemented locally within documented native-UI limits; devcontainer validation remains.
+2. Integrate agent lifecycle events and quiet attention signals. Adapters are implemented for supported events; interactive validation and provider capability gaps remain.
+3. Extend persistent task and project records, recovery, and repository reconciliation. Migrations, explicit lock recovery and initial compaction are implemented; richer records and reconciliation remain.
 4. Add automatic coordinator-to-worker communication and handover.
 5. Add PR tracking, review coordination, and configurable merge actions.
 
@@ -188,4 +189,4 @@ Replace the coordinator with another supported agent. The new coordinator receiv
 
 Rebuild a devcontainer with project state on persistent storage. Reopen the project and recover the coordination record without relying on surviving agent processes or private conversation history.
 
-These are product acceptance scenarios. The current automated tests cover a subset: layout geometry, live VS Code group/tab behaviour, persistence, mailbox acknowledgement, service authentication, invalid requests, helper reconnection after service restart, Claude hook-driven attention through the helper/service and extension indicators (including parallel tools and subagents), and Copilot hook-driven attention, resume correlation, error reporting and non-blocking reporting failures.
+These are product acceptance scenarios, not a claim that the full product is complete. Current automated tests cover layout geometry and live VS Code groups/tabs through nine groups, tenth-agent tab fallback, maximise/restore, read-only second-window behaviour, persistence, migrations, explicit lock recovery, interrupted writes, compaction, mailbox acknowledgement, authentication and role permissions, secret rejection, and helper reconnection. Claude, Codex and Copilot hook tests cover supported lifecycle/attention events, request correlation, subagents and reporting failures; extension tests cover quiet indicators. Full interactive provider flows, repository/PR reconciliation and devcontainer rebuild recovery remain unverified.

@@ -70,6 +70,161 @@ test('corrupt state fails visibly without overwriting it or leaking the lock', t
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test('a stale lock is never reclaimed automatically, reports its owner, and is only removed explicitly', t => {
+  const directory = temporary();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(directory, 'writer.lock'), JSON.stringify({ pid: 2 ** 22 + 1, hostname: 'old-container', startedAt: '2026-01-01T00:00:00.000Z' }));
+  assert.throws(() => new Store(directory), error => error.code === 'PROJECT_LOCKED' && /process 4194305 on old-container since 2026-01-01.*never reclaimed automatically/.test(error.message));
+  const owner = Store.lockOwner(directory);
+  assert.equal(owner.hostname, 'old-container');
+  Store.breakLock(directory, owner);
+  const store = new Store(directory);
+  assert.equal(Store.lockOwner(directory).pid, process.pid);
+  store.close();
+  assert.equal(Store.lockOwner(directory), undefined);
+  fs.writeFileSync(path.join(directory, 'writer.lock'), '1234\n');
+  assert.equal(Store.lockOwner(directory).pid, 1234);
+});
+
+test('recovery cannot remove a replacement lock and a displaced writer cannot commit or release it', t => {
+  const directory = temporary();
+  let second;
+  t.after(() => { second?.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const first = new Store(directory);
+  const confirmed = Store.lockOwner(directory);
+  // Simulate explicit recovery of a still-running owner; it must lose all write authority.
+  Store.breakLock(directory, confirmed);
+  second = new Store(directory);
+  const replacement = Store.lockOwner(directory);
+  assert.throws(() => Store.breakLock(directory, confirmed), /lock changed/);
+  assert.throws(() => Store.breakLock(directory), /lock changed/);
+  const before = fs.readFileSync(path.join(directory, 'state.json'), 'utf8');
+  assert.throws(() => first.register({ name: 'Lost writer', kind: 'shell' }), /ownership was lost/);
+  assert.equal(fs.readFileSync(path.join(directory, 'state.json'), 'utf8'), before);
+  assert.throws(() => first.close(), /current lock was not removed/);
+  assert.equal(Store.lockOwner(directory).raw, replacement.raw);
+  second.register({ name: 'Still owned', kind: 'shell' });
+});
+
+test('recovery excludes another process throughout the lock removal operation', t => {
+  const directory = temporary();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const lock = path.join(directory, 'writer.lock');
+  fs.writeFileSync(lock, '1234\n');
+  const confirmed = Store.lockOwner(directory);
+  const unlink = fs.unlinkSync;
+  let contender;
+  t.mock.method(fs, 'unlinkSync', filename => {
+    unlink(filename);
+    if (filename === lock) contender = spawnSync(process.execPath, ['-e', `
+      const { Store } = require(${JSON.stringify(require.resolve('../src/store'))});
+      try { new Store(process.argv[1]); process.exitCode = 1; }
+      catch (error) {
+        if (!/writer operation is in progress/.test(error.message)) throw error;
+      }
+    `, directory], { encoding: 'utf8', timeout: 10000 });
+  });
+  Store.breakLock(directory, confirmed);
+  assert.equal(contender.status, 0, contender.stderr);
+  const store = new Store(directory);
+  store.close();
+});
+
+test('an interrupted writer operation fails closed instead of reclaiming its guard', t => {
+  const directory = temporary();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const lock = path.join(directory, 'writer.lock');
+  fs.writeFileSync(lock, '1234\n');
+  const owner = Store.lockOwner(directory);
+  fs.mkdirSync(path.join(directory, 'writer-operation.lock'));
+  assert.throws(() => new Store(directory), /stop all Murmurplex windows and containers/);
+  assert.throws(() => Store.breakLock(directory, owner), /writer operation is in progress/);
+  assert.equal(Store.lockOwner(directory).raw, owner.raw);
+});
+
+test('cleanup preserves non-writer backups, directories and symlinks', t => {
+  const directory = temporary();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const backup = path.join(directory, 'state.json.manual-backup.tmp');
+  const orphan = path.join(directory, 'state.json.12345678-1234-4123-8123-123456789abc.tmp');
+  const folder = path.join(directory, 'state.json.12345678-1234-4123-8123-123456789abd.tmp');
+  const link = path.join(directory, 'state.json.12345678-1234-4123-8123-123456789abe.tmp');
+  fs.writeFileSync(backup, 'manual backup');
+  fs.writeFileSync(orphan, 'partial write');
+  fs.mkdirSync(folder);
+  if (process.platform !== 'win32') fs.symlinkSync(backup, link);
+  const store = new Store(directory);
+  store.close();
+  assert.equal(fs.existsSync(orphan), false);
+  assert.equal(fs.readFileSync(backup, 'utf8'), 'manual backup');
+  assert.ok(fs.statSync(folder).isDirectory());
+  if (process.platform !== 'win32') assert.ok(fs.lstatSync(link).isSymbolicLink());
+});
+
+for (const stage of ['partial-write', 'after-fsync', 'before-rename']) {
+  test(`a killed subprocess preserves committed state at ${stage} and recovers its orphan`, t => {
+    const directory = temporary();
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    let store = new Store(directory);
+    const agent = store.register({ name: 'Lead', kind: 'claude' });
+    store.close();
+    const before = JSON.parse(fs.readFileSync(path.join(directory, 'state.json'), 'utf8'));
+    const child = spawnSync(process.execPath, ['-e', `
+      const fs = require('node:fs');
+      const { Store } = require(${JSON.stringify(require.resolve('../src/store'))});
+      const store = new Store(process.argv[1]);
+      fs.copyFileSync(store.filename, require('node:path').join(process.argv[1], 'committed.json'));
+      const write = fs.writeFileSync;
+      const sync = fs.fsyncSync;
+      if (process.argv[2] === 'partial-write') {
+        fs.writeFileSync = (fd, data, ...args) => {
+          write(fd, data.slice(0, 12), ...args);
+          process.kill(process.pid, 'SIGKILL');
+        };
+      } else if (process.argv[2] === 'after-fsync') {
+        fs.fsyncSync = fd => { sync(fd); process.kill(process.pid, 'SIGKILL'); };
+      } else {
+        fs.renameSync = () => { process.kill(process.pid, 'SIGKILL'); };
+      }
+      store.register({ name: 'Uncommitted', kind: 'shell' });
+    `, directory, stage], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(child.error, undefined);
+    assert.ok(child.signal === 'SIGKILL' || (process.platform === 'win32' && child.status !== 0), child.stderr);
+    const saved = JSON.parse(fs.readFileSync(path.join(directory, 'state.json'), 'utf8'));
+    assert.equal(fs.readFileSync(path.join(directory, 'state.json'), 'utf8'), fs.readFileSync(path.join(directory, 'committed.json'), 'utf8'));
+    assert.deepEqual(saved.agents.map(a => a.id), before.agents.map(a => a.id));
+    const orphans = fs.readdirSync(directory).filter(name => name.endsWith('.tmp'));
+    assert.equal(orphans.length, 1);
+    if (stage === 'before-rename') {
+      assert.throws(() => new Store(directory), /writer operation is in progress/);
+      // The subprocess is dead and no other service exists; offline guard removal is safe.
+      fs.rmdirSync(path.join(directory, 'writer-operation.lock'));
+    }
+    assert.throws(() => new Store(directory), /stale writer\.lock/);
+    Store.breakLock(directory, Store.lockOwner(directory));
+    store = new Store(directory);
+    assert.equal(store.agent(agent.id).name, 'Lead');
+    assert.equal(store.snapshot().agents.length, 1);
+    assert.equal(fs.existsSync(path.join(directory, orphans[0])), false);
+    store.close();
+  });
+}
+
+test('a failed rename preserves both committed and in-memory state and releases its operation guard', t => {
+  const directory = temporary();
+  const store = new Store(directory);
+  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const before = fs.readFileSync(path.join(directory, 'state.json'), 'utf8');
+  const state = store.snapshot();
+  const rename = t.mock.method(fs, 'renameSync', () => { throw new Error('injected rename failure'); });
+  assert.throws(() => store.register({ name: 'Uncommitted', kind: 'shell' }), /injected rename failure/);
+  rename.mock.restore();
+  assert.equal(fs.readFileSync(path.join(directory, 'state.json'), 'utf8'), before);
+  assert.deepEqual(store.snapshot(), state);
+  assert.equal(fs.existsSync(path.join(directory, 'writer-operation.lock')), false);
+  assert.equal(fs.readdirSync(directory).some(name => name.endsWith('.tmp')), false);
+});
+
 const tokenOf = (service, id) => JSON.parse(fs.readFileSync(service.credentialFile(id), 'utf8')).token;
 
 test('credentials stay outside Git even without ignore rules and legacy checkout credentials are removed', async t => {
@@ -191,4 +346,48 @@ test('agent helper reads refreshed credentials after a service restart and never
   service.revokeCredential(agent.id);
   await assert.rejects(execFile(process.execPath, [helper, 'status', 'idle'], { env: environment }), /ENOENT/);
   await assert.rejects(execFile(process.execPath, [helper, 'status', 'idle'], { env: { ...process.env, MURMURPLEX_AGENT_ID: agent.id } }), /No Murmurplex credentials/);
+});
+
+test('compaction drops only the oldest resolved messages and decisions, never unacknowledged mail', t => {
+  const directory = temporary(t);
+  let store = new Store(directory, undefined, { retainResolved: 2 });
+  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const lead = store.register({ name: 'Lead', kind: 'shell' });
+  const worker = store.register({ name: 'Worker', kind: 'shell' });
+  const pending = store.send({ from: lead.id, to: worker.id, body: 'pending-oldest' });
+  const resolved = ['one', 'two', 'three', 'four'].map(body => {
+    const message = store.send({ from: lead.id, to: worker.id, body });
+    store.acknowledge(worker.id, message.id);
+    return message;
+  });
+  for (const body of ['d1', 'd2', 'd3']) store.decision(body);
+  const state = store.snapshot();
+  assert.deepEqual(state.messages.map(m => m.body), ['pending-oldest', 'three', 'four']);
+  assert.ok(state.messages.some(m => m.id === pending.id && !m.acknowledgedAt));
+  assert.equal(state.messages.some(m => m.id === resolved[0].id), false);
+  assert.deepEqual(state.decisions.map(d => d.body), ['d2', 'd3']);
+  store.close();
+  store = new Store(directory, undefined, { retainResolved: 2 });
+  assert.deepEqual(store.snapshot().messages.map(m => m.body), ['pending-oldest', 'three', 'four']);
+});
+
+test('a read-only view reads the owner\'s state without taking the lock, writing, or migrating', t => {
+  const directory = temporary();
+  const owner = new Store(directory);
+  t.after(() => { owner.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  owner.register({ name: 'Lead', kind: 'shell' });
+  const view = Store.readOnly(directory);
+  assert.equal(view.snapshot().agents[0].name, 'Lead');
+  assert.equal(view.update, undefined);
+  owner.register({ name: 'Worker', kind: 'shell' });
+  assert.equal(view.snapshot().agents.length, 1);
+  view.reload();
+  assert.equal(view.snapshot().agents.length, 2);
+  assert.equal(Store.lockOwner(directory).pid, process.pid);
+  const before = fs.readdirSync(directory).sort();
+  fs.writeFileSync(path.join(directory, 'state.json'), '{broken');
+  assert.throws(() => view.reload());
+  fs.writeFileSync(path.join(directory, 'state.json'), JSON.stringify({ version: 99 }));
+  assert.throws(() => view.reload());
+  assert.deepEqual(fs.readdirSync(directory).sort(), before);
 });

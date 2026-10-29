@@ -4,6 +4,7 @@ const vscode = require('vscode');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { Store } = require('../src/store');
 async function waitFor(predicate, message) {
   for (let n = 0; n < 100; n++) {
     if (predicate()) return;
@@ -26,6 +27,15 @@ async function run() {
   });
 
   try {
+    // Another owner holds the project: this window must stay read-only, and take over once the lock is released.
+    const directory = path.join(root, '.murmurplex');
+    const otherOwner = new Store(directory);
+    otherOwner.register({ name: 'Other window agent', kind: 'shell' });
+    const lockBefore = fs.readFileSync(path.join(directory, 'writer.lock'), 'utf8');
+    assert.equal(await vscode.commands.executeCommand('murmurplex.addTab', { kind: 'shell', name: 'Blocked' }), undefined);
+    assert.equal(vscode.window.terminals.length, 0, 'read-only window must not launch agents');
+    assert.equal(fs.readFileSync(path.join(directory, 'writer.lock'), 'utf8'), lockBefore, 'read-only window must not touch the owner lock');
+    otherOwner.close();
     const lead = await vscode.commands.executeCommand('murmurplex.addTab', { kind: 'shell', name: 'Integration lead' });
     assert.ok(lead?.id);
     await waitFor(() => vscode.window.tabGroups.all[0].tabs.length === 1, 'first terminal tab did not open');
@@ -36,6 +46,10 @@ async function run() {
     await waitFor(() => vscode.window.tabGroups.all.length === 2, 'second terminal group did not open');
     const workerGroup = vscode.window.tabGroups.all.find(group => group !== leadGroup);
     const workerTerminal = vscode.window.terminals.find(terminal => terminal.name.includes(worker.id));
+    await waitFor(() => vscode.window.activeTerminal === workerTerminal
+      && vscode.window.tabGroups.activeTabGroup === workerGroup
+      && workerGroup.activeTab?.input instanceof vscode.TabInputTerminal,
+    () => `worker terminal did not open in the new group: ${focusState()}`);
     const reviewer = await vscode.commands.executeCommand('murmurplex.addTab', { kind: 'shell', name: 'Integration reviewer' });
     assert.ok(reviewer?.id);
     await waitFor(() => vscode.window.tabGroups.all.some(group => group.tabs.length === 2), 'second tab did not remain in the same group');
@@ -65,6 +79,41 @@ async function run() {
       await pendingBalance;
       await waitFor(() => focused(leadTerminal, leadGroup), () => `lead group did not receive focus: ${focusState()}`);
     }
+    // Settle time and equal areas for one to nine groups, including odd counts.
+    const settle = async count => {
+      const started = Date.now();
+      for (;;) {
+        const sizes = leaves(await vscode.commands.executeCommand('vscode.getEditorLayout')).map(pane => pane.size);
+        if (sizes.length === count && Math.abs(Math.max(...sizes) - Math.min(...sizes)) / Math.max(...sizes) < 0.02) return Date.now() - started;
+        if (Date.now() - started > 1000) throw new Error(`${count} groups did not settle to equal panes: ${JSON.stringify(await vscode.commands.executeCommand('vscode.getEditorLayout'))} ${focusState()}`);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    };
+    const settleTimes = [];
+    while (vscode.window.tabGroups.all.length < 9) {
+      const count = vscode.window.tabGroups.all.length + 1;
+      await vscode.commands.executeCommand('murmurplex.addPane', { kind: 'shell', name: `Integration grid ${count}` });
+      await waitFor(() => vscode.window.tabGroups.all.length === count, 'grid group did not open');
+      settleTimes.push([count, await settle(count)]);
+    }
+    fs.writeFileSync(path.join(root, 'settle-times.json'), JSON.stringify(settleTimes));
+    // A tenth agent becomes a tab instead of a tenth group.
+    const tenth = await vscode.commands.executeCommand('murmurplex.addPane', { kind: 'shell', name: 'Integration tenth' });
+    assert.ok(tenth?.id);
+    await waitFor(() => vscode.window.terminals.some(t => t.name.includes(tenth.id)), 'tenth agent terminal did not open');
+    assert.equal(vscode.window.tabGroups.all.length, 9);
+    // Maximise keeps every terminal alive, and restore returns to the balanced grid.
+    const before = vscode.window.terminals.length;
+    await vscode.commands.executeCommand('murmurplex.maximize');
+    assert.equal(vscode.window.tabGroups.all.length, 9);
+    assert.equal(vscode.window.terminals.length, before);
+    await vscode.commands.executeCommand('murmurplex.maximize');
+    assert.equal(await settle(9) >= 0, true);
+    assert.equal(vscode.window.terminals.length, before);
+    for (const terminal of vscode.window.terminals) {
+      if (/Integration (grid|tenth)/.test(terminal.name)) terminal.dispose();
+    }
+    await waitFor(() => vscode.window.tabGroups.all.length === 2, 'grid groups did not close');
     const extra = await vscode.commands.executeCommand('murmurplex.addPane', { kind: 'shell', name: 'Integration extra' });
     await waitFor(() => vscode.window.tabGroups.all.length === 3, 'adding from an earlier group reused a neighbour instead of creating a group');
     vscode.window.terminals.find(t => t.name.includes(extra.id)).dispose();
@@ -91,7 +140,7 @@ async function run() {
     const reviewerTerminal = vscode.window.terminals.find(t => t.name.includes(reviewer.id));
     reviewerTerminal.dispose();
     await waitFor(() => vscode.window.tabGroups.all.length === 1, 'empty terminal group did not close');
-    fs.writeFileSync(path.join(root, 'integration-result.json'), JSON.stringify({ passed: true, checks: ['grid', 'tabs', 'balance', 'focus', 'attention', 'credentials', 'removal'] }));
+    fs.writeFileSync(path.join(root, 'integration-result.json'), JSON.stringify({ passed: true, checks: ['grid', 'tabs', 'balance', 'focus', 'attention', 'credentials', 'removal', 'grid-1-9', 'tenth-agent-tab', 'maximize-restore', 'read-only-second-window'] }));
     console.log('MURMURPLEX INTEGRATION PASS: terminal grid, nested tabs, balance, focus, persisted attention, removal.');
   } catch (error) {
     fs.writeFileSync(path.join(root, 'integration-result.json'), JSON.stringify({ passed: false, error: error.stack }));

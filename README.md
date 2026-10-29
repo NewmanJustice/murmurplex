@@ -31,9 +31,11 @@ code --new-window --extensionDevelopmentPath=/absolute/path/to/murmurplex /absol
 | Command | Behaviour |
 | --- | --- |
 | Start or Resume Project | Starts the local service and loads the project record; launches the first agent on a new project. |
+| Recover Stale Project Lock | After confirming all project services are stopped, removes the unchanged writer lock. Does not remove a crashed writer-operation guard. |
 | Add Agent Terminal Group | Adds an agent in a new visible editor group. |
 | Add Agent Tab to Current Group | Adds another agent tab in the focused group. |
 | Balance Terminal Grid | Gives editor panes equal area. |
+| Maximize or Restore Terminal Group | Shrinks the other groups to their minimum size so the focused group fills the editor area; run it again to restore the balanced grid. Terminals keep running. Automatic balancing pauses meanwhile, and opening or closing a group ends the maximised state. It does not use VS Code's native maximise, which exposes no state; repeating either step is harmless. |
 | Resume Saved Agent | Reuses a saved agent identity and mailbox in a new terminal. Paste the project handover to restore its context. |
 | Change Coordinator | Changes the single coordinator identity in the saved record. |
 | Copy Project Handover | Selects a recipient and copies its permitted state and mailbox instructions. |
@@ -150,20 +152,28 @@ On startup, old `.murmurplex/credentials/` and `.murmurplex/runtime.json` files 
 
 Project state is written through an atomic file replacement to `.murmurplex/state.json`. There is one writer per project directory. State is updated on each change, independently of an end-of-session handover. Add `.murmurplex/` to the target project's `.gitignore`.
 
+Each write keeps the newest 500 acknowledged messages and 500 decisions; older ones are discarded without an archive. Unacknowledged messages are never discarded.
+
 State is versioned (currently 2). Opening an older project migrates it in memory, validates it, and keeps the original as `state.json.v<N>.bak` (written once, never overwritten) before the first write. State written by a newer Murmurplex, or state that fails validation, is refused and left untouched; there are no downgrades. Migrations live in `src/migrations.js`.
 
 The project directory must be on a persistent bind mount or volume if it is to survive container rebuilds. Back up `.murmurplex/state.json` alongside other important local project data. The included devcontainer mounts the source workspace using the standard Dev Containers workspace mount.
 
 On reopening, saved agents are marked disconnected until their terminals can be reconnected. A restored terminal's actual agent state remains unknown until it reports status. Pending attention and mailbox items remain recorded. **Resume Saved Agent** preserves the identity and its mailbox; it starts a new CLI conversation, not a guaranteed continuation of the original CLI conversation.
 
-The service runs for the extension session. It stops when the extension deactivates; the project record remains on disk. Reconnected terminals discover fresh credentials through their stable credential-file paths in extension storage after a restart. After an abnormal crash, a stale `writer.lock` may need manual removal **after confirming no service still owns the project**. A second service will refuse to start rather than risk overwriting another writer's changes.
+The service runs for the extension session. It stops when the extension deactivates; the project record remains on disk. Reconnected terminals discover fresh credentials through their stable credential-file paths in extension storage after a restart. After an abnormal crash, a stale `writer.lock` may remain. It is never reclaimed automatically, because a PID can be reused or belong to another container; the startup error describes the holder when metadata is available. After confirming no service still owns the project, run **Murmurplex: Recover Stale Project Lock**. Recovery refuses a lock that changed during confirmation. Acquisition, recovery, commits and release are serialized, and a displaced service cannot commit or delete its replacement's lock.
+
+The short-lived `writer-operation.lock` directory guards those operations. If a crash leaves it behind, Murmurplex fails closed: stop **all** Murmurplex windows and containers using the project before manually removing that empty directory, then recover `writer.lock` normally. Do not remove the operation guard while any service could still be running.
+
+An interrupted process write leaves the last committed `state.json`; only regular temporary files matching the writer's UUID filename format are cleaned on restart. These guarantees assume a filesystem with atomic exclusive creation and rename. File data is synced before replacement, but directory entries are not synced, so this is not a guarantee of persistence through power loss.
 
 ### Prototype boundaries
 
-- Native editor groups provide the layout. While Murmurplex is active, auto-balance affects the **whole current editor grid**, including groups containing source files. It does not close or replace their tabs. Use a dedicated window or set `murmurplex.autoBalance` to `false` if you want to arrange source editors independently.
-- The grid supports up to nine groups; additional agents can be tabs. VS Code's minimum pane sizes still apply. Odd group counts use different row heights to keep pane areas equal. Automatic removal of an empty group relies on VS Code's `workbench.editor.closeEmptyGroups` setting, enabled by default.
+- Native editor groups provide the layout. Automatic balancing affects the **whole current editor grid**, so it pauses while any source-editor tab (text, diff, custom or notebook) is open or a group is maximised; **Balance Terminal Grid** still balances on request. VS Code offers no API to isolate terminals from source editors, so complete separation is not possible; use a dedicated window or set `murmurplex.autoBalance` to `false` to arrange source editors independently. Balancing never closes or replaces tabs.
+- The grid supports up to nine groups. When nine exist, a new agent opens as a tab in the focused group. VS Code's minimum pane sizes still apply. Odd group counts use different row heights to keep pane areas equal. Automatic removal of an empty group relies on VS Code's `workbench.editor.closeEmptyGroups` setting, enabled by default.
 - Coordinator styling in the Explorer agent list is live and authoritative. Native terminal star/title/icon styling reflects the role at terminal creation; switching the coordinator does not yet restyle existing native tabs or transfer a model's private conversation history.
 - Claude, Codex and Copilot terminals launched by Murmurplex have automatic lifecycle reporting for the events described above (Codex needs one-time hook trust; Copilot permission prompts and Codex questions are manual). Shell sessions and unsupported prompts require the helper or manual status command. Native terminal tabs/groups do not yet have dynamic attention styling; the Explorer list and aggregate status-bar indicator remain authoritative.
+- Opening a project already owned by another window or container makes this window a read-only view: the agent list and status bar show the owner's saved state and refresh as it changes, but nothing is written and no agents launch. Run **Start or Resume Project** to take over after the other window closes, or **Recover Stale Project Lock** if its owner crashed.
+- VS Code offers no way to decorate terminal tabs, so hidden tabs cannot show attention; use the Explorer list and status bar.
 - Task assignment and coordinator selection are persistent records. Automated delegation, active coordinator handover, idle-agent wakeup, PR discovery, repository reconciliation, and merge controls are not implemented yet. The handover instructs agents to check repository state and request approval; this prototype does not enforce external Git actions.
 - Backlog and decisions are accessible through the helper and handover; a dedicated backlog UI and richer PR/worktree records are next steps.
 
@@ -191,9 +201,9 @@ npm run check
 npm run test:vscode
 ```
 
-The first command tests persistence, recovery, single-writer protection, corrupt-state handling, message acknowledgement, authentication, request limits, grid geometry, Claude, Codex and Copilot hook reporting through the helper/service, and extension indicators. The second checks extension and service syntax.
+The first command tests persistence, migrations, interrupted writes, explicit stale-lock recovery, single-writer protection, read-only views, compaction, corrupt-state handling, message acknowledgement, authentication and role permissions, secret rejection, request limits, grid geometry, Claude, Codex and Copilot hook reporting through the helper/service, and extension indicators. The second checks source/helper/security-script syntax.
 
-The VS Code integration test needs a graphical desktop and `code` on PATH (override with `VSCODE_CLI`; add launch flags such as `--no-sandbox` with `VSCODE_ARGS`). CI runs it under Xvfb. It launches an isolated temporary profile and project, checks real terminal tabs and groups, balanced pane sizes, persisted attention, and removal of a group while keeping its neighbour. It leaves its temporary logs for diagnosis and does not use your normal VS Code profile.
+The VS Code integration test needs a graphical desktop and `code` on PATH (override with `VSCODE_CLI`; add launch flags such as `--no-sandbox` with `VSCODE_ARGS`). CI runs it under Xvfb. It launches an isolated temporary profile and project, checks real terminal tabs and groups, balanced pane sizes through nine groups with a one-second settle limit, tenth-agent tab fallback, maximise/restore, read-only second-window takeover, persisted attention, and removal of a group while keeping its neighbour. Set `MURMURPLEX_TEST_LOAD=N` to add N busy processes during the test; they stop when the runner finishes. It leaves its temporary logs for diagnosis and does not use your normal VS Code profile. These checks do not replace interactive provider or devcontainer rebuild validation.
 
 ## Architecture
 
