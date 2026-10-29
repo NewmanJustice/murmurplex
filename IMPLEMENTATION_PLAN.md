@@ -14,7 +14,7 @@ be used today.
 | --- | --- | --- |
 | Terminal workspace | Native editor groups, agent tabs, automatic grid balancing, maximise/restore, tenth-agent-as-tab, read-only second-window view, passing graphical validation for one to nine groups. | Isolation from source-editor groups and tab-level indicators (no VS Code API); devcontainer settle timing. |
 | Lifecycle and attention | Claude, Codex and Copilot hook adapters, persistent requests, quiet Explorer/status-bar indicators, manual fallback. | Copilot permission prompts, Codex questions, unsupported Claude prompts, tab/group indicators. |
-| Project record | Atomic writes, single writer, agents, coordinator identity, tasks with priorities, acceptance criteria, cycle-checked dependencies, progress and blockers, decisions, mailbox, versioned schema with tested migrations/backups, explicit stale-lock recovery, interrupted-write coverage and initial compaction. Read-only Git observations show branch, `HEAD`, working-tree changes and worktrees on startup; task branch/worktree references are persisted and compared locally. | Persisted PR references, remote-branch/PR reconciliation, archival/completed-task retention, devcontainer recovery; crashed operation guards still require offline manual removal. No power-loss durability guarantee. |
+| Project record | Atomic writes, single writer, agents, coordinator identity, tasks with priorities, acceptance criteria, cycle-checked dependencies, progress, next actions and blockers, decisions, mailbox, versioned schema with tested migrations/backups, explicit stale-lock recovery, interrupted-write coverage and initial compaction. Read-only Git observations show branch, `HEAD`, working-tree changes and worktrees on startup; task branch/worktree references are persisted and compared locally. | Persisted PR references, remote-branch/PR reconciliation, archival/completed-task retention, devcontainer recovery; crashed operation guards still require offline manual removal. No power-loss durability guarantee. |
 | Coordination | Saved coordinator selection, recipient-filtered copyable handover, per-agent credentials and enforced coordinator/worker permissions. | Configurable assignment authority, interruption-safe active handover, delivery tracking, automatic delivery and wakeup. |
 | PR workflow | Handover text asks agents to verify state and get approval. | PR/review tracking, controlled merging, approval UI. |
 | Engineering | Node tests, syntax check, graphical test script, GitHub Actions CI (Node 20/22, Xvfb VS Code test). | No packaging, no compatibility testing against provider CLI versions. |
@@ -260,7 +260,7 @@ Acceptance:
 - A devcontainer rebuild with persistent state recovers the record without
   surviving agent processes or old credentials.
 
-Status: schema version 4 and migration backups, explicit stale-lock recovery,
+Status: schema version 5 and migration backups, explicit stale-lock recovery,
 writer-ownership checks, interrupted-write cleanup and initial compaction are
 implemented and tested. Each write retains the newest 500 acknowledged messages
 and 500 decisions, without archival; unacknowledged messages are preserved and
@@ -274,13 +274,16 @@ unverified; no automatic repair occurs. Remote-branch/PR reconciliation,
 devcontainer rebuild validation and a fuller retention policy remain. A crash
 inside a guarded writer operation
 requires offline manual removal of `writer-operation.lock` after stopping all
-project services. File data is synced before rename, but directory entries are
-not; power-loss durability is not guaranteed. Task metadata includes priority
-(`low`, `normal`, `high`, `urgent`), bounded acceptance criteria and progress
-and blocker text, plus dependencies on existing tasks. Migrations add defaults
-to older tasks; writes and loads reject invalid references and dependency
-cycles. Metadata is available to agents through the helper and visible in the
+project services. File data is synced before rename, but directory entries are not; power-loss
+durability is not guaranteed. Task metadata includes priority (`low`, `normal`,
+`high`, `urgent`), bounded acceptance criteria, progress, next-action and
+blocker text, plus dependencies on existing tasks. Migrations add defaults to
+older tasks; writes and loads reject invalid references and dependency cycles.
+Metadata is available to agents through the helper and visible in the
 Repository Explorer; it does not automatically alter task status or Git state.
+Handovers are regenerated from this saved record. In devcontainers, the
+project's `.murmurplex/state.json` must remain on the persistent workspace
+mount; runtime credentials remain outside that mount and are recreated.
 
 ## 4. Coordination and delivery
 

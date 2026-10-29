@@ -52,13 +52,15 @@ test('only the user manages membership; coordinator authority follows handover a
     assert.deepEqual(service.store.snapshot(), before, 'denied operations cannot mutate state');
   }
   const updated = await (await request(worker, '/tasks', {
-    id: assigned.id, status: 'review', progress: 'Review complete', blocker: 'Waiting for approval'
+    id: assigned.id, status: 'review', progress: 'Review complete',
+    nextAction: 'Request coordinator review', blocker: 'Waiting for approval'
   })).json();
   assert.equal(updated.ownerId, worker.id);
   assert.equal(updated.title, 'Review');
   assert.equal(updated.status, 'review');
   assert.equal(updated.priority, 'high', 'workers cannot change coordinator-owned planning metadata');
   assert.equal(updated.progress, 'Review complete');
+  assert.equal(updated.nextAction, 'Request coordinator review');
   assert.equal(updated.blocker, 'Waiting for approval');
   assert.deepEqual(updated.acceptanceCriteria, ['Changes are covered by tests']);
   assert.equal((await request(lead, '/decisions', { body: 'Review required' })).status, 200);

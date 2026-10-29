@@ -253,6 +253,7 @@ class Store {
     const acceptanceCriteria = input.acceptanceCriteria === undefined ? existing?.acceptanceCriteria ?? [] : input.acceptanceCriteria;
     const dependsOn = input.dependsOn === undefined ? existing?.dependsOn ?? [] : input.dependsOn;
     const progress = input.progress === undefined ? existing?.progress ?? '' : input.progress;
+    const nextAction = input.nextAction === undefined ? existing?.nextAction ?? '' : input.nextAction;
     const blocker = input.blocker === undefined ? existing?.blocker ?? null : input.blocker;
     if (branch !== null && branch !== branch.trim()) throw new Error('branch cannot have leading or trailing whitespace.');
     for (const [name, value] of [['branch', branch], ['worktreePath', worktreePath]]) {
@@ -260,11 +261,11 @@ class Store {
     }
     return this.update(next => {
       const task = input.id ? next.tasks.find(t => t.id === input.id) : {
-        id: randomUUID(), priority: 'normal', acceptanceCriteria: [], dependsOn: [], progress: '', blocker: null
+        id: randomUUID(), priority: 'normal', acceptanceCriteria: [], dependsOn: [], progress: '', nextAction: '', blocker: null
       };
       Object.assign(task, {
         title: input.title, status, ownerId: input.ownerId || null, branch, worktreePath,
-        priority, acceptanceCriteria, dependsOn, progress, blocker, updatedAt: new Date().toISOString()
+        priority, acceptanceCriteria, dependsOn, progress, nextAction, blocker, updatedAt: new Date().toISOString()
       });
       if (!input.id) next.tasks.push(task);
       validateTaskRecords(next.tasks, new Set(next.agents.map(agent => agent.id)));

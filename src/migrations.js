@@ -4,7 +4,7 @@ const PROVIDERS = ['claude', 'codex', 'copilot'];
 const ATTENTION = [null, 'needs-input', 'needs-permission'];
 const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
 const COLLECTIONS = ['agents', 'tasks', 'messages', 'decisions'];
-const CURRENT_VERSION = 4;
+const CURRENT_VERSION = 5;
 
 const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
 
@@ -43,6 +43,12 @@ const MIGRATIONS = {
       if (task.progress === undefined) task.progress = '';
       if (task.blocker === undefined) task.blocker = null;
     }
+  },
+  4(state) {
+    for (const task of state.tasks) {
+      if (!isObject(task)) continue;
+      if (task.nextAction === undefined) task.nextAction = '';
+    }
   }
 };
 
@@ -80,6 +86,7 @@ function validateTaskRecords(tasks, agentIds) {
       throw new Error(`Project state task ${task.id} has invalid acceptance criteria.`);
     }
     if (typeof task.progress !== 'string' || task.progress.length > 4000) throw new Error(`Project state task ${task.id} has invalid progress.`);
+    if (typeof task.nextAction !== 'string' || task.nextAction.length > 4000) throw new Error(`Project state task ${task.id} has an invalid next action.`);
     if (task.blocker !== null && (typeof task.blocker !== 'string' || !task.blocker.trim() || task.blocker.length > 2000)) {
       throw new Error(`Project state task ${task.id} has an invalid blocker.`);
     }

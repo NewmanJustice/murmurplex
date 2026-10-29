@@ -57,7 +57,7 @@ test('version 2 tasks gain optional branch and worktree references during migrat
   assert.equal(state.version, CURRENT_VERSION);
   assert.deepEqual(state.tasks[0], {
     id: 'task-1', title: 'Review', status: 'review', ownerId: 'a', branch: null, worktreePath: null,
-    priority: 'normal', acceptanceCriteria: [], dependsOn: [], progress: '', blocker: null
+    priority: 'normal', acceptanceCriteria: [], dependsOn: [], progress: '', blocker: null, nextAction: ''
   });
   assert.equal(fs.readFileSync(`${file}.v2.bak`, 'utf8'), raw);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, CURRENT_VERSION);
@@ -78,6 +78,23 @@ test('version 3 tasks gain richer metadata defaults during migration', t => {
   assert.equal(task.progress, '');
   assert.equal(task.blocker, null);
   assert.equal(fs.readFileSync(`${file}.v3.bak`, 'utf8'), raw);
+});
+
+test('version 4 tasks gain next-action defaults during migration', t => {
+  const legacy = v1({
+    version: 4,
+    tasks: [{
+      id: 'task-1', title: 'Review', status: 'review', ownerId: 'a', branch: 'main', worktreePath: null,
+      priority: 'normal', acceptanceCriteria: [], dependsOn: [], progress: 'Code ready', blocker: null
+    }]
+  });
+  const { root, file, raw } = project(t, legacy);
+  const store = new Store(root);
+  const task = store.snapshot().tasks[0];
+  store.close();
+  assert.equal(task.progress, 'Code ready');
+  assert.equal(task.nextAction, '');
+  assert.equal(fs.readFileSync(`${file}.v4.bak`, 'utf8'), raw);
 });
 
 test('new projects start at the current version without a backup', t => {
@@ -105,11 +122,11 @@ test('newer, malformed or inconsistent state is refused and left untouched', t =
     'missing task reference fields': v1({ version: CURRENT_VERSION, tasks: [{ id: 'task' }] }),
     'missing task dependency': v1({ version: CURRENT_VERSION, tasks: [{
       id: 'task-1', ownerId: null, branch: null, worktreePath: null, priority: 'normal',
-      acceptanceCriteria: [], dependsOn: ['missing'], progress: '', blocker: null
+      acceptanceCriteria: [], dependsOn: ['missing'], progress: '', blocker: null, nextAction: ''
     }] }),
     'cyclic task dependencies': v1({ version: CURRENT_VERSION, tasks: [
-      { id: 'task-1', ownerId: null, branch: null, worktreePath: null, priority: 'normal', acceptanceCriteria: [], dependsOn: ['task-2'], progress: '', blocker: null },
-      { id: 'task-2', ownerId: null, branch: null, worktreePath: null, priority: 'normal', acceptanceCriteria: [], dependsOn: ['task-1'], progress: '', blocker: null }
+      { id: 'task-1', ownerId: null, branch: null, worktreePath: null, priority: 'normal', acceptanceCriteria: [], dependsOn: ['task-2'], progress: '', blocker: null, nextAction: '' },
+      { id: 'task-2', ownerId: null, branch: null, worktreePath: null, priority: 'normal', acceptanceCriteria: [], dependsOn: ['task-1'], progress: '', blocker: null, nextAction: '' }
     ] }),
     'not an object': '[]'
   };

@@ -296,7 +296,8 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
     body: JSON.stringify({
       title: 'Tracked feature', status: 'in-progress', ownerId: agent.id,
       branch: 'main', worktreePath: root, priority: 'high',
-      acceptanceCriteria: ['Tests pass'], progress: 'Implementation ready', blocker: 'Review pending'
+      acceptanceCriteria: ['Tests pass'], progress: 'Implementation ready',
+      nextAction: 'Run the recovery tests', blocker: 'Review pending'
     })
   });
   assert.equal(taskResponse.status, 200);
@@ -304,7 +305,9 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   const trackedTask = repositoryProvider.getChildren(tasks).find(item => item.label === 'Tracked feature' && item.description === 'HIGH · in-progress');
   assert.equal(trackedTask.description, 'HIGH · in-progress');
   assert.match(trackedTask.tooltip, /Progress: Implementation ready/);
+  assert.match(trackedTask.tooltip, /Next: Run the recovery tests/);
   assert.match(trackedTask.tooltip, /Blocker: Review pending/);
+  assert.equal(repositoryProvider.getChildren(trackedTask).find(item => item.label === 'Next action').description, 'Run the recovery tests');
   const criteria = repositoryProvider.getChildren(trackedTask).find(item => item.label === 'Acceptance criteria');
   assert.equal(repositoryProvider.getChildren(criteria)[0].label, 'Tests pass');
   const references = repositoryProvider.getChildren().find(item => item.label === 'Saved task references');
@@ -318,6 +321,7 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   selectedAgent = other.id;
   await commands.get('murmurplex.brief')();
   assert.match(handover, /Worker-visible exchange/);
+  assert.match(handover, /Run the recovery tests/);
   assert.doesNotMatch(handover, /Coordinator-only exchange/);
   assert.ok(!handover.includes(credential.token));
   inheritAuthentication = true;
