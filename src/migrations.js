@@ -2,8 +2,9 @@
 const KINDS = ['claude', 'codex', 'copilot', 'shell'];
 const PROVIDERS = ['claude', 'codex', 'copilot'];
 const ATTENTION = [null, 'needs-input', 'needs-permission'];
+const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
 const COLLECTIONS = ['agents', 'tasks', 'messages', 'decisions'];
-const CURRENT_VERSION = 3;
+const CURRENT_VERSION = 4;
 
 const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
 
@@ -31,6 +32,17 @@ const MIGRATIONS = {
       if (task.branch === undefined) task.branch = null;
       if (task.worktreePath === undefined) task.worktreePath = null;
     }
+  },
+  3(state) {
+    for (const task of state.tasks) {
+      if (!isObject(task)) continue;
+      if (task.ownerId === undefined) task.ownerId = null;
+      if (task.priority === undefined) task.priority = 'normal';
+      if (task.acceptanceCriteria === undefined) task.acceptanceCriteria = [];
+      if (task.dependsOn === undefined) task.dependsOn = [];
+      if (task.progress === undefined) task.progress = '';
+      if (task.blocker === undefined) task.blocker = null;
+    }
   }
 };
 
@@ -44,16 +56,60 @@ function validate(state, states) {
     ids.add(agent.id);
     if (typeof agent.name !== 'string' || !KINDS.includes(agent.kind) || !states.has(agent.status) || !ATTENTION.includes(agent.attention ?? null)) throw new Error(`Project state agent ${agent.id} is invalid.`);
   }
-  for (const task of state.tasks) {
+  validateTaskRecords(state.tasks, ids);
+  if (state.coordinatorId !== null && !ids.has(state.coordinatorId)) throw new Error('Project state coordinator is not a known agent.');
+}
+
+function validateTaskRecords(tasks, agentIds) {
+  const taskIds = new Set();
+  for (const task of tasks) {
     if (!isObject(task) || typeof task.id !== 'string' || !task.id) throw new Error('Project state has an invalid task.');
+    if (taskIds.has(task.id)) throw new Error(`Project state has duplicate task ${task.id}.`);
+    taskIds.add(task.id);
+  }
+  for (const task of tasks) {
     if (task.branch !== null && (typeof task.branch !== 'string' || !task.branch.trim() || task.branch !== task.branch.trim() || task.branch.length > 255 || /[\u0000-\u001f]/.test(task.branch))) {
       throw new Error(`Project state task ${task.id} has an invalid branch reference.`);
     }
     if (task.worktreePath !== null && (typeof task.worktreePath !== 'string' || !task.worktreePath.trim() || task.worktreePath.length > 4096 || /[\u0000-\u001f]/.test(task.worktreePath))) {
       throw new Error(`Project state task ${task.id} has an invalid worktree path.`);
     }
+    if (!TASK_PRIORITIES.includes(task.priority)) throw new Error(`Project state task ${task.id} has an invalid priority.`);
+    if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length > 50
+      || task.acceptanceCriteria.some(criterion => typeof criterion !== 'string' || !criterion.trim() || criterion.length > 1000)) {
+      throw new Error(`Project state task ${task.id} has invalid acceptance criteria.`);
+    }
+    if (typeof task.progress !== 'string' || task.progress.length > 4000) throw new Error(`Project state task ${task.id} has invalid progress.`);
+    if (task.blocker !== null && (typeof task.blocker !== 'string' || !task.blocker.trim() || task.blocker.length > 2000)) {
+      throw new Error(`Project state task ${task.id} has an invalid blocker.`);
+    }
+    if (!Array.isArray(task.dependsOn) || task.dependsOn.length > 100
+      || task.dependsOn.some(id => typeof id !== 'string' || !id || id === task.id || !taskIds.has(id))
+      || new Set(task.dependsOn).size !== task.dependsOn.length) {
+      throw new Error(`Project state task ${task.id} has invalid dependencies.`);
+    }
+    if (task.ownerId !== null && (typeof task.ownerId !== 'string' || !agentIds.has(task.ownerId))) {
+      throw new Error(`Project state task ${task.id} has an invalid owner.`);
+    }
   }
-  if (state.coordinatorId !== null && !ids.has(state.coordinatorId)) throw new Error('Project state coordinator is not a known agent.');
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  const dependents = new Map([...taskIds].map(id => [id, []]));
+  const remaining = new Map();
+  for (const task of tasks) {
+    remaining.set(task.id, task.dependsOn.length);
+    for (const dependency of task.dependsOn) dependents.get(dependency).push(task.id);
+  }
+  const ready = [...taskIds].filter(id => remaining.get(id) === 0);
+  let processed = 0;
+  while (ready.length) {
+    const id = ready.pop();
+    processed++;
+    for (const dependent of dependents.get(id)) {
+      remaining.set(dependent, remaining.get(dependent) - 1);
+      if (remaining.get(dependent) === 0) ready.push(dependent);
+    }
+  }
+  if (processed !== taskIds.size) throw new Error('Project state task dependencies contain a cycle.');
 }
 
 // Returns the migrated state and the version it started from. Never mutates the input.
@@ -71,4 +127,4 @@ function migrate(input, states) {
   return { state, from };
 }
 
-module.exports = { CURRENT_VERSION, migrate, validate };
+module.exports = { CURRENT_VERSION, migrate, validate, validateTaskRecords };

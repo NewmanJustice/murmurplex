@@ -67,6 +67,35 @@ test('task branch and worktree references persist, update and reject invalid val
   assert.deepEqual(store.snapshot().tasks[0], updated);
 });
 
+test('task metadata persists and dependencies must reference existing tasks without cycles', t => {
+  const directory = temporary(t);
+  const store = new Store(directory);
+  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const first = store.task({
+    title: 'Build API', priority: 'high', acceptanceCriteria: ['Returns a stable ID', 'Rejects invalid input'],
+    progress: 'Routes are implemented'
+  });
+  const second = store.task({
+    title: 'Review API', status: 'blocked', priority: 'urgent', dependsOn: [first.id], blocker: 'Waiting for fixtures'
+  });
+  assert.deepEqual(second.dependsOn, [first.id]);
+  const updated = store.task({ id: second.id, title: second.title, status: 'review' });
+  assert.equal(updated.priority, 'urgent');
+  assert.equal(updated.blocker, 'Waiting for fixtures');
+  assert.deepEqual(updated.dependsOn, [first.id]);
+  const before = fs.readFileSync(path.join(directory, 'state.json'), 'utf8');
+  for (const invalid of [
+    { id: first.id, title: first.title, priority: 'critical' },
+    { id: first.id, title: first.title, acceptanceCriteria: [' '] },
+    { id: first.id, title: first.title, dependsOn: ['missing-task'] },
+    { id: first.id, title: first.title, dependsOn: [first.id] },
+    { id: first.id, title: first.title, dependsOn: [second.id] },
+    { id: first.id, title: first.title, progress: 'x'.repeat(4001) },
+    { id: first.id, title: first.title, blocker: 'x'.repeat(2001) }
+  ]) assert.throws(() => store.task(invalid));
+  assert.equal(fs.readFileSync(path.join(directory, 'state.json'), 'utf8'), before, 'invalid metadata never reaches disk');
+});
+
 test('single writer and validation failures preserve committed state', t => {
   const directory = temporary(t);
   const store = new Store(directory); t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -334,7 +363,9 @@ test('CLI help documents queued delivery without requiring credentials', () => {
   const result = spawnSync(process.execPath, [path.join(__dirname, '../bin/murmurplex-agent'), 'help'], { encoding: 'utf8' });
   assert.equal(result.status, 0);
   assert.match(result.stdout, /does not wake another agent/);
-  assert.match(result.stdout, /task <title> \[status\] \[owner-id\] \[task-id\] \[branch\] \[worktree-path\] \[--clear-branch\]/);
+  assert.match(result.stdout, /task <title> \[status\] \[owner-id\] \[task-id\] \[branch\] \[worktree-path\] \[task options\]/);
+  assert.match(result.stdout, /--depends-on=TASK_ID/);
+  assert.match(result.stdout, /--clear-branch/);
 });
 
 test('agent helper reads refreshed credentials after a service restart and never needs a token in its environment', async t => {
@@ -360,12 +391,35 @@ test('agent helper reads refreshed credentials after a service restart and never
   assert.equal(JSON.parse(received.stdout)[0].id, message.id);
   await execFile(process.execPath, [helper, 'status', 'needs-input'], { env: environment });
   assert.equal(service.store.agent(agent.id).attention, 'needs-input');
-  const taskResult = await execFile(process.execPath, [helper, 'task', 'Tracked work', 'in-progress', '-', '-', 'null', 'null'], { env: environment });
+  const prerequisite = service.store.task({ title: 'Prerequisite' });
+  const taskResult = await execFile(process.execPath, [
+    helper, 'task', 'Tracked work', 'in-progress', agent.id, '-', 'null', 'null',
+    '--priority=high', '--acceptance=Tests pass', '--acceptance=Docs updated',
+    `--depends-on=${prerequisite.id}`, '--progress=Implementation complete', '--blocker=Review pending'
+  ], { env: environment });
   const task = JSON.parse(taskResult.stdout);
   assert.equal(task.branch, 'null', 'literal null is accepted as a branch name');
   assert.equal(task.worktreePath, 'null', 'literal null is accepted as a worktree path');
+  assert.equal(task.priority, 'high');
+  assert.deepEqual(task.acceptanceCriteria, ['Tests pass', 'Docs updated']);
+  assert.deepEqual(task.dependsOn, [prerequisite.id]);
+  assert.equal(task.progress, 'Implementation complete');
+  assert.equal(task.blocker, 'Review pending');
   const taskUpdate = await execFile(process.execPath, [helper, 'task', 'Tracked work', 'review', '-', task.id], { env: environment });
-  assert.equal(JSON.parse(taskUpdate.stdout).branch, 'null', 'omitted task references survive CLI updates');
+  const updatedTask = JSON.parse(taskUpdate.stdout);
+  assert.equal(updatedTask.branch, 'null', 'omitted task references survive CLI updates');
+  assert.equal(updatedTask.priority, 'high', 'omitted task metadata survives CLI updates');
+  assert.deepEqual(updatedTask.acceptanceCriteria, ['Tests pass', 'Docs updated']);
+  assert.deepEqual(updatedTask.dependsOn, [prerequisite.id]);
+  const metadataClear = await execFile(process.execPath, [
+    helper, 'task', 'Tracked work', 'review', '-', task.id, '-', '-',
+    '--clear-acceptance', '--clear-dependencies', '--clear-progress', '--clear-blocker'
+  ], { env: environment });
+  const clearedTask = JSON.parse(metadataClear.stdout);
+  assert.deepEqual(clearedTask.acceptanceCriteria, []);
+  assert.deepEqual(clearedTask.dependsOn, []);
+  assert.equal(clearedTask.progress, '');
+  assert.equal(clearedTask.blocker, null);
   const taskClear = await execFile(process.execPath, [helper, 'task', 'Tracked work', 'review', '-', task.id, '-', '-', '--clear-branch', '--clear-worktree'], { env: environment });
   assert.equal(JSON.parse(taskClear.stdout).branch, null);
   assert.equal(JSON.parse(taskClear.stdout).worktreePath, null);

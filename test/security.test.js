@@ -28,7 +28,10 @@ async function fixture(t) {
 
 test('only the user manages membership; coordinator authority follows handover and workers cannot reassign tasks', async t => {
   const { service, agents: [lead, worker, other], request } = await fixture(t);
-  const assigned = await (await request(lead, '/tasks', { title: 'Review', ownerId: worker.id })).json();
+  const assigned = await (await request(lead, '/tasks', {
+    title: 'Review', ownerId: worker.id, priority: 'high',
+    acceptanceCriteria: ['Changes are covered by tests']
+  })).json();
   const others = service.store.task({ title: 'Other work', ownerId: other.id });
   const before = service.store.snapshot();
   for (const [agent, route, body] of [
@@ -40,15 +43,24 @@ test('only the user manages membership; coordinator authority follows handover a
     [worker, '/tasks', { title: 'New task', ownerId: worker.id }],
     [worker, '/tasks', { id: others.id, title: 'Stolen', ownerId: worker.id }],
     [worker, '/tasks', { id: assigned.id, title: 'Reassigned', ownerId: other.id }],
-    [worker, '/tasks', { id: assigned.id, title: 'Unassigned', ownerId: null }]
+    [worker, '/tasks', { id: assigned.id, title: 'Unassigned', ownerId: null }],
+    [worker, '/tasks', { id: assigned.id, priority: 'urgent' }],
+    [worker, '/tasks', { id: assigned.id, acceptanceCriteria: [] }],
+    [worker, '/tasks', { id: assigned.id, dependsOn: [others.id] }]
   ]) {
     assert.equal((await request(agent, route, body)).status, 403, route);
     assert.deepEqual(service.store.snapshot(), before, 'denied operations cannot mutate state');
   }
-  const updated = await (await request(worker, '/tasks', { id: assigned.id, status: 'review' })).json();
+  const updated = await (await request(worker, '/tasks', {
+    id: assigned.id, status: 'review', progress: 'Review complete', blocker: 'Waiting for approval'
+  })).json();
   assert.equal(updated.ownerId, worker.id);
   assert.equal(updated.title, 'Review');
   assert.equal(updated.status, 'review');
+  assert.equal(updated.priority, 'high', 'workers cannot change coordinator-owned planning metadata');
+  assert.equal(updated.progress, 'Review complete');
+  assert.equal(updated.blocker, 'Waiting for approval');
+  assert.deepEqual(updated.acceptanceCriteria, ['Changes are covered by tests']);
   assert.equal((await request(lead, '/decisions', { body: 'Review required' })).status, 200);
   service.store.coordinator(worker.id);
   assert.equal((await request(lead, '/decisions', { body: 'Former coordinator' })).status, 403);

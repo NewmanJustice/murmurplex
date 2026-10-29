@@ -57,6 +57,9 @@ async function startService(directory, credentialsDirectory, onChange = () => {}
             if (!task || task.ownerId !== caller || (body.ownerId !== undefined && body.ownerId !== caller)) {
               throw new ForbiddenError('Workers can update only tasks assigned to themselves and cannot reassign them.');
             }
+            if (['priority', 'acceptanceCriteria', 'dependsOn'].some(field => Object.hasOwn(body, field))) {
+              throw new ForbiddenError('Only the coordinator can change task priority, acceptance criteria or dependencies.');
+            }
             result = store.task({ ...task, ...body, ownerId: caller });
           }
           break;

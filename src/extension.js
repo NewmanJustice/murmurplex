@@ -58,6 +58,7 @@ function activate(context) {
       if (!repositoryState) return [{ label: 'Start or Resume Project to inspect Git state.', command: 'murmurplex.start' }];
       if (repositoryState.loading) return [{ label: 'Inspecting repository…' }];
       const taskReferences = repositoryState.taskReferences || [];
+      const tasks = state()?.tasks || [];
       const referenceGroup = {
         label: 'Saved task references',
         description: String(taskReferences.length),
@@ -67,8 +68,35 @@ function activate(context) {
           tooltip: [reference.branch && `branch ${reference.branch}`, reference.worktreePath && `worktree ${reference.worktreePath}`].filter(Boolean).join('\n')
         })) : [{ label: 'No task branch or worktree references saved.' }]
       };
+      const taskGroup = {
+        label: 'Tasks',
+        description: String(tasks.length),
+        children: tasks.length ? tasks.map(task => ({
+          label: task.title,
+          description: `${task.priority.toUpperCase()} · ${task.status}`,
+          tooltip: [task.ownerId && `owner ${task.ownerId}`, task.progress && `Progress: ${task.progress}`, task.blocker && `Blocker: ${task.blocker}`].filter(Boolean).join('\n'),
+          children: [
+            ...(task.acceptanceCriteria.length ? [{
+              label: 'Acceptance criteria',
+              description: String(task.acceptanceCriteria.length),
+              children: task.acceptanceCriteria.map(criterion => ({ label: criterion }))
+            }] : []),
+            ...(task.dependsOn.length ? [{
+              label: 'Dependencies',
+              description: String(task.dependsOn.length),
+              children: task.dependsOn.map(id => {
+                const dependency = tasks.find(candidate => candidate.id === id);
+                return { label: dependency ? dependency.title : id };
+              })
+            }] : []),
+            ...(task.progress ? [{ label: 'Progress', description: task.progress }] : []),
+            ...(task.blocker ? [{ label: 'Blocker', description: task.blocker }] : [])
+          ]
+        })) : [{ label: 'No tasks saved.' }]
+      };
       if (repositoryState.error) return [
         { label: 'Git state could not be inspected', description: repositoryState.error },
+        taskGroup,
         referenceGroup
       ];
       const observed = repositoryState;
@@ -86,6 +114,7 @@ function activate(context) {
         { label: 'Branch', description: observed.branch || 'detached HEAD' },
         { label: 'HEAD', description: observed.head || '(no commits)' },
         ...children,
+        taskGroup,
         referenceGroup
       ];
     },

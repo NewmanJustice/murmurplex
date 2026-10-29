@@ -6,7 +6,7 @@ const { randomUUID } = require('node:crypto');
 const { claudeEvent, applyClaudeEvent } = require('./claude');
 const { codexEvent, applyCodexEvent } = require('./codex');
 const { copilotEvent, applyCopilotEvent } = require('./copilot');
-const { CURRENT_VERSION, migrate } = require('./migrations');
+const { CURRENT_VERSION, migrate, validateTaskRecords } = require('./migrations');
 const { assertNoSecrets, parseJSON } = require('./security');
 const STATES = new Set(['working', 'idle', 'needs-input', 'needs-permission', 'finished', 'disconnected', 'unknown']);
 const TASK_STATES = new Set(['backlog', 'in-progress', 'blocked', 'review', 'done']);
@@ -249,14 +249,25 @@ class Store {
     };
     const branch = reference('branch', 'branch', 255);
     const worktreePath = reference('worktreePath', 'worktreePath', 4096);
+    const priority = input.priority === undefined ? existing?.priority ?? 'normal' : input.priority;
+    const acceptanceCriteria = input.acceptanceCriteria === undefined ? existing?.acceptanceCriteria ?? [] : input.acceptanceCriteria;
+    const dependsOn = input.dependsOn === undefined ? existing?.dependsOn ?? [] : input.dependsOn;
+    const progress = input.progress === undefined ? existing?.progress ?? '' : input.progress;
+    const blocker = input.blocker === undefined ? existing?.blocker ?? null : input.blocker;
     if (branch !== null && branch !== branch.trim()) throw new Error('branch cannot have leading or trailing whitespace.');
     for (const [name, value] of [['branch', branch], ['worktreePath', worktreePath]]) {
       if (value !== null && /[\u0000-\u001f]/.test(value)) throw new Error(`${name} contains invalid control characters.`);
     }
     return this.update(next => {
-      const task = input.id ? next.tasks.find(t => t.id === input.id) : { id: randomUUID() };
-      Object.assign(task, { title: input.title, status, ownerId: input.ownerId || null, branch, worktreePath, updatedAt: new Date().toISOString() });
+      const task = input.id ? next.tasks.find(t => t.id === input.id) : {
+        id: randomUUID(), priority: 'normal', acceptanceCriteria: [], dependsOn: [], progress: '', blocker: null
+      };
+      Object.assign(task, {
+        title: input.title, status, ownerId: input.ownerId || null, branch, worktreePath,
+        priority, acceptanceCriteria, dependsOn, progress, blocker, updatedAt: new Date().toISOString()
+      });
       if (!input.id) next.tasks.push(task);
+      validateTaskRecords(next.tasks, new Set(next.agents.map(agent => agent.id)));
       return task;
     });
   }

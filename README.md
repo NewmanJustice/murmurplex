@@ -60,10 +60,14 @@ murmurplex-agent status needs-permission
 murmurplex-agent status working
 murmurplex-agent task 'Review login changes' review OWNER_ID
 murmurplex-agent task 'Implement feature' in-progress OWNER_ID - feature/next /projects/feature
+murmurplex-agent task 'Implement feature' in-progress OWNER_ID - - - --priority=high --acceptance='Tests cover recovery' --progress='API complete'
+murmurplex-agent task 'Review feature' backlog OWNER_ID - - - --depends-on=TASK_ID
 murmurplex-agent decision 'User approval is required before merging.'
 ```
 
-`state` lists agent and task IDs. `task` accepts a title, optional status, owner ID, existing task ID, branch and worktree path in that order; use `-` to leave a positional value unspecified. Append `--clear-branch` or `--clear-worktree` to clear a reference, or `--branch=VALUE` and `--worktree=VALUE` to set one explicitly; these forms allow literal values such as `null` and `-`. Worktree paths can be absolute or relative to the project root. References persist with the task; omitted references on task updates are retained. Only the coordinator can create or assign tasks and record decisions. Workers can update the title/status/references of their own assigned tasks using the existing task ID, but cannot change ownership. For coordinator updates, provide title, status and owner because omitted status/owner reset to their defaults. Valid task states: `backlog`, `in-progress`, `blocked`, `review`, `done`.
+`state` lists agent and task IDs. `task` accepts a title, optional status, owner ID, existing task ID, branch and worktree path in that order; use `-` to leave a positional value unspecified. Append task options after those positions: priority is `low`, `normal`, `high` or `urgent`; repeat `--acceptance=TEXT` and `--depends-on=TASK_ID` for lists; set narrative fields with `--progress=TEXT` and `--blocker=TEXT`. Use `--clear-acceptance`, `--clear-dependencies`, `--clear-progress` or `--clear-blocker` to clear those fields. Dependencies must refer to existing tasks and cannot contain self-references or cycles. Omitted metadata is retained on updates. Priority, acceptance criteria and dependencies are coordinator-owned planning fields; workers may update progress and blockers among these fields on their own tasks. Task metadata is validated and persisted; the Repository view shows saved tasks, acceptance criteria, dependencies, progress and blockers. These fields do not automatically change task status or Git state.
+
+Append `--clear-branch` or `--clear-worktree` to clear a reference, or `--branch=VALUE` and `--worktree=VALUE` to set one explicitly; these forms allow literal values such as `null` and `-`. Worktree paths can be absolute or relative to the project root. References persist with the task; omitted references on task updates are retained. Only the coordinator can create or assign tasks, change priority/acceptance criteria/dependencies, and record decisions. Workers can update their own assigned tasks' status, progress, blockers, title and Git references using the existing task ID, but cannot change ownership. For coordinator updates, provide title, status and owner because omitted status/owner reset to their defaults. Valid task states: `backlog`, `in-progress`, `blocked`, `review`, `done`.
 
 Status values: `working`, `idle`, `needs-input`, `needs-permission`, `finished`, `disconnected`, `unknown`. `working`, `idle`, and `finished` resolve attention; disconnecting or focusing a terminal does not.
 
@@ -81,7 +85,7 @@ Environment filtering is best-effort, not a sandbox: unknown variable names, she
 | --- | --- | --- | --- |
 | Add agents or replace coordinator | Yes | No | No |
 | Create/assign tasks; record decisions | Via coordinator; no task/decision UI yet | Yes | No |
-| Update assigned tasks | Via agents; no task UI yet | Any task | Own tasks only; no reassignment |
+| Update assigned tasks | No task-management UI yet | Any task | Own tasks only; no reassignment |
 | Read project record | Full record | Full record | Shared agents/tasks/decisions; only messages sent or received by that worker |
 | Report status/hooks; acknowledge mail | Manual status available | Own identity only | Own identity only |
 | Send messages | As user | As self | As self |

@@ -293,9 +293,20 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
   const taskResponse = await fetch(credential.url + '/tasks', {
     method: 'POST',
     headers: { Authorization: `Bearer ${credential.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: 'Tracked feature', status: 'in-progress', ownerId: agent.id, branch: 'main', worktreePath: root })
+    body: JSON.stringify({
+      title: 'Tracked feature', status: 'in-progress', ownerId: agent.id,
+      branch: 'main', worktreePath: root, priority: 'high',
+      acceptanceCriteria: ['Tests pass'], progress: 'Implementation ready', blocker: 'Review pending'
+    })
   });
   assert.equal(taskResponse.status, 200);
+  const tasks = repositoryProvider.getChildren().find(item => item.label === 'Tasks');
+  const trackedTask = repositoryProvider.getChildren(tasks).find(item => item.label === 'Tracked feature' && item.description === 'HIGH · in-progress');
+  assert.equal(trackedTask.description, 'HIGH · in-progress');
+  assert.match(trackedTask.tooltip, /Progress: Implementation ready/);
+  assert.match(trackedTask.tooltip, /Blocker: Review pending/);
+  const criteria = repositoryProvider.getChildren(trackedTask).find(item => item.label === 'Acceptance criteria');
+  assert.equal(repositoryProvider.getChildren(criteria)[0].label, 'Tests pass');
   const references = repositoryProvider.getChildren().find(item => item.label === 'Saved task references');
   assert.equal(repositoryProvider.getChildren(references)[0].description, 'PRESENT', 'task changes refresh the saved-reference view without rerunning Git');
   assert.equal(repositoryProvider.getChildren(references)[0].tooltip, `branch main\nworktree ${root}`);
