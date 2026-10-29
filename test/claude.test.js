@@ -301,6 +301,7 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
     })
   });
   assert.equal(taskResponse.status, 200);
+  const savedTask = await taskResponse.json();
   const tasks = repositoryProvider.getChildren().find(item => item.label === 'Tasks');
   const trackedTask = repositoryProvider.getChildren(tasks).find(item => item.label === 'Tracked feature' && item.description === 'HIGH · in-progress');
   assert.equal(trackedTask.description, 'HIGH · in-progress');
@@ -317,10 +318,11 @@ test('extension launches scoped hooks and keeps hidden-agent attention visible w
     method: 'POST', headers: { Authorization: `Bearer ${credential.token}` }, body: JSON.stringify(body)
   });
   assert.equal((await post({ to: agent.id, body: 'Coordinator-only exchange' })).status, 200);
-  assert.equal((await post({ to: other.id, body: 'Worker-visible exchange' })).status, 200);
+  assert.equal((await post({ to: other.id, body: 'Worker-visible exchange', taskId: savedTask.id })).status, 200);
   selectedAgent = other.id;
   await commands.get('murmurplex.brief')();
   assert.match(handover, /Worker-visible exchange/);
+  assert.ok(handover.includes(`"taskId": "${savedTask.id}"`));
   assert.match(handover, /Run the recovery tests/);
   assert.doesNotMatch(handover, /Coordinator-only exchange/);
   assert.ok(!handover.includes(credential.token));

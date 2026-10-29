@@ -10,6 +10,7 @@ async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!command || command === 'help') {
     console.log(`Murmurplex project mailbox\n\n    state\ninbox\nsend <recipient-id> <message...>\nack <message-id>\nstatus <working|idle|needs-input|needs-permission|finished>\ntask <title> [status] [owner-id] [task-id] [branch] [worktree-path] [task options]\ndecision <text...>\n\nCoordinator-only task planning options: --priority=low|normal|high|urgent; repeat --acceptance=TEXT and --depends-on=TASK_ID. Workers can update progress, next action and blockers with --progress=TEXT, --next-action=TEXT and --blocker=TEXT. Clear acceptance/dependencies with --clear-acceptance or --clear-dependencies (coordinator only); clear progress/next action/blocker with --clear-progress, --clear-next-action or --clear-blocker. Clear branch/worktree references with --clear-branch or --clear-worktree; set them with --branch=VALUE or --worktree=VALUE. Task dependencies must name existing tasks and cannot contain cycles.\nRun inside a Murmurplex terminal; messages are durable and require explicit acknowledgement.\nOnly the coordinator creates/assigns tasks and records decisions. Workers update their own assigned tasks using the existing task ID and cannot reassign them.\nTask references are optional; worktree paths may be absolute or relative to the project root.\nWorker state includes only messages they sent or received. Keep secrets out of messages, tasks and decisions.\nReading an inbox does not wake another agent or submit a prompt to its terminal.`);
+    console.log('\nTask-linked messages: send-task <recipient-id> <task-id> <message...>\nThe task must exist. Linking a message does not assign or complete the task.');
     return;
   }
   const agentId = process.env.MURMURPLEX_AGENT_ID;
@@ -33,6 +34,11 @@ async function main() {
     case 'state': endpoint = '/state'; break;
     case 'inbox': endpoint = agentId ? `/inbox?agentId=${encodeURIComponent(agentId)}` : '/inbox'; break;
     case 'send': endpoint = '/messages'; body = { from: agentId, to: args[0], body: args.slice(1).join(' ') }; break;
+    case 'send-task':
+      if (args.length < 3) throw new Error('Use send-task <recipient-id> <task-id> <message...>.');
+      endpoint = '/messages';
+      body = { from: agentId, to: args[0], taskId: args[1], body: args.slice(2).join(' ') };
+      break;
     case 'ack': endpoint = '/ack'; body = { agentId, messageId: args[0] }; break;
     case 'status': endpoint = '/status'; body = { agentId, status: args[0] }; break;
     case 'task': {

@@ -4,7 +4,7 @@ const PROVIDERS = ['claude', 'codex', 'copilot'];
 const ATTENTION = [null, 'needs-input', 'needs-permission'];
 const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
 const COLLECTIONS = ['agents', 'tasks', 'messages', 'decisions'];
-const CURRENT_VERSION = 5;
+const CURRENT_VERSION = 6;
 
 const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
 
@@ -49,6 +49,12 @@ const MIGRATIONS = {
       if (!isObject(task)) continue;
       if (task.nextAction === undefined) task.nextAction = '';
     }
+  },
+  5(state) {
+    for (const message of state.messages) {
+      if (!isObject(message)) continue;
+      if (message.taskId === undefined) message.taskId = null;
+    }
   }
 };
 
@@ -63,7 +69,18 @@ function validate(state, states) {
     if (typeof agent.name !== 'string' || !KINDS.includes(agent.kind) || !states.has(agent.status) || !ATTENTION.includes(agent.attention ?? null)) throw new Error(`Project state agent ${agent.id} is invalid.`);
   }
   validateTaskRecords(state.tasks, ids);
+  const taskIds = new Set(state.tasks.map(task => task.id));
+  for (const message of state.messages) {
+    if (!isObject(message)) throw new Error('Project state has an invalid message.');
+    validateMessageTask(message.taskId, taskIds);
+  }
   if (state.coordinatorId !== null && !ids.has(state.coordinatorId)) throw new Error('Project state coordinator is not a known agent.');
+}
+
+function validateMessageTask(taskId, taskIds) {
+  if (taskId !== null && (typeof taskId !== 'string' || !taskIds.has(taskId))) {
+    throw new Error('Message taskId must be null or an existing task ID.');
+  }
 }
 
 function validateTaskRecords(tasks, agentIds) {
@@ -134,4 +151,4 @@ function migrate(input, states) {
   return { state, from };
 }
 
-module.exports = { CURRENT_VERSION, migrate, validate, validateTaskRecords };
+module.exports = { CURRENT_VERSION, migrate, validate, validateTaskRecords, validateMessageTask };

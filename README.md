@@ -55,6 +55,7 @@ Every terminal launched by Murmurplex has `murmurplex-agent` on its PATH and an 
 murmurplex-agent state
 murmurplex-agent inbox
 murmurplex-agent send RECIPIENT_ID 'Please review my changes.'
+murmurplex-agent send-task RECIPIENT_ID TASK_ID 'Please review this task.'
 murmurplex-agent ack MESSAGE_ID
 murmurplex-agent status needs-permission
 murmurplex-agent status working
@@ -72,6 +73,8 @@ Append `--clear-branch` or `--clear-worktree` to clear a reference, or `--branch
 Status values: `working`, `idle`, `needs-input`, `needs-permission`, `finished`, `disconnected`, `unknown`. `working`, `idle`, and `finished` resolve attention; disconnecting or focusing a terminal does not.
 
 Reading an inbox does **not** acknowledge its messages. Acknowledgements persist. Mailbox delivery is pull-based in this prototype: agents need to check their inboxes, and messages never inject keystrokes into a terminal or automatically wake an agent.
+
+`send-task` links a message to an existing task; ordinary `send` messages remain unlinked (`taskId: null`). The API accepts the same optional `taskId` on `/messages`. Links persist in the project record across restarts and container rebuilds when the workspace mount is retained, and appear in inbox/state output and generated handovers. A link does not assign, update or complete a task, imply delivery, or grant access to the message: workers still see only messages they sent or received, even if they own the linked task. Any agent can discuss any shared task. The VS Code **Send Agent Message** command continues to send unlinked messages.
 
 ### Authentication and permissions
 
@@ -162,7 +165,7 @@ Project state is written through an atomic file replacement to `.murmurplex/stat
 
 Each write keeps the newest 500 acknowledged messages and 500 decisions; older ones are discarded without an archive. Unacknowledged messages are never discarded.
 
-State is versioned (currently 5). Opening an older project migrates it in memory, validates it, and keeps the original as `state.json.v<N>.bak` (written once, never overwritten) before the first write. State written by a newer Murmurplex, or state that fails validation, is refused and left untouched; there are no downgrades. Migrations live in `src/migrations.js`.
+State is versioned (currently 6). Opening an older project migrates it in memory, validates it, and keeps the original as `state.json.v<N>.bak` (written once, never overwritten) before the first write. State written by a newer Murmurplex, or state that fails validation, is refused and left untouched; there are no downgrades. Migrations live in `src/migrations.js`.
 
 The project directory must be on a persistent bind mount or volume if it is to survive container rebuilds. Back up `.murmurplex/state.json` alongside other important local project data. The included devcontainer uses the standard Dev Containers source-workspace mount; its `.murmurplex/state.json` remains available across container rebuilds while that workspace mount is retained. Task progress and next actions are stored in that project record, not in container home or VS Code extension storage. Each copied handover is generated from the latest saved state, but text already pasted into an agent can become stale; copy a fresh handover after relevant changes. Runtime credentials remain outside the project directory and are recreated when the service starts.
 

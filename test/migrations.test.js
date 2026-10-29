@@ -106,6 +106,21 @@ test('new projects start at the current version without a backup', t => {
   assert.deepEqual(fs.readdirSync(root).filter(name => name.endsWith('.bak')), []);
 });
 
+test('version 5 messages gain nullable task links without losing acknowledgements', t => {
+  const legacy = v1({
+    version: 5,
+    messages: [
+      { id: 'm1', from: 'a', to: 'a', body: 'Pending', acknowledgedAt: null },
+      { id: 'm2', from: 'user', to: 'a', body: 'Read', acknowledgedAt: '2026-10-29T10:00:00Z' }
+    ]
+  });
+  const { root, file, raw } = project(t, legacy);
+  const store = new Store(root);
+  assert.deepEqual(store.snapshot().messages, legacy.messages.map(message => ({ ...message, taskId: null })));
+  store.close();
+  assert.equal(fs.readFileSync(`${file}.v5.bak`, 'utf8'), raw);
+});
+
 test('newer, malformed or inconsistent state is refused and left untouched', t => {
   const cases = {
     newer: v1({ version: CURRENT_VERSION + 1 }),
@@ -118,6 +133,9 @@ test('newer, malformed or inconsistent state is refused and left untouched', t =
     'unknown status': v1({ agents: [{ ...v1().agents[0], status: 'sleeping' }] }),
     'bad attention': v1({ agents: [{ ...v1().agents[0], attention: 'angry' }] }),
     'unknown coordinator': v1({ coordinatorId: 'missing' }),
+    'missing message task': v1({ messages: [{ id: 'm', taskId: 'missing' }] }),
+    'invalid message task': v1({ messages: [{ id: 'm', taskId: 42 }] }),
+    'missing message task field': v1({ version: CURRENT_VERSION, messages: [{ id: 'm' }] }),
     'invalid task branch': v1({ tasks: [{ id: 'task', branch: 'bad\nbranch', worktreePath: null }] }),
     'missing task reference fields': v1({ version: CURRENT_VERSION, tasks: [{ id: 'task' }] }),
     'missing task dependency': v1({ version: CURRENT_VERSION, tasks: [{
@@ -132,7 +150,7 @@ test('newer, malformed or inconsistent state is refused and left untouched', t =
   };
   for (const [name, state] of Object.entries(cases)) {
     const { root, file, raw } = project(t, state);
-    assert.throws(() => new Store(root), /state|Murmurplex/, name);
+    assert.throws(() => new Store(root), /state|Murmurplex|taskId/, name);
     assert.equal(fs.readFileSync(file, 'utf8'), raw, `${name}: original file preserved`);
     assert.equal(fs.existsSync(path.join(root, 'writer.lock')), false, `${name}: lock released`);
     assert.deepEqual(fs.readdirSync(root).filter(entry => entry.endsWith('.bak')), [], `${name}: no backup for refused state`);

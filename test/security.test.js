@@ -85,6 +85,25 @@ test('worker state includes only sent and received messages; the live coordinato
   assert.deepEqual((await (await request(lead, '/state')).json()).messages.map(message => message.body), ['Not for worker', 'Received by worker']);
 });
 
+test('task-linked messages preserve sender identity, visibility and task ownership', async t => {
+  const { service, agents: [lead, worker, other], request } = await fixture(t);
+  const task = service.store.task({ title: 'Review', ownerId: other.id });
+  const response = await request(worker, '/messages', { to: lead.id, taskId: task.id, body: 'Can I help review?' });
+  assert.equal(response.status, 200);
+  const message = await response.json();
+  assert.equal(message.from, worker.id);
+  assert.equal(message.taskId, task.id);
+  assert.deepEqual(service.store.snapshot().tasks[0], task);
+  assert.equal((await (await request(worker, '/state')).json()).messages[0].taskId, task.id);
+  assert.deepEqual((await (await request(other, '/state')).json()).messages, [], 'owning the linked task does not grant message access');
+  const before = service.store.snapshot();
+  assert.equal((await request(worker, '/messages', { from: other.id, to: lead.id, taskId: task.id, body: 'Spoofed sender' })).status, 403);
+  assert.equal((await request(worker, '/messages', { to: lead.id, taskId: 'missing', body: 'Invalid link' })).status, 400);
+  assert.equal((await request(worker, '/ack', { messageId: message.id })).status, 400);
+  assert.deepEqual(service.store.snapshot(), before);
+  assert.equal((await request(lead, '/ack', { messageId: message.id })).status, 200);
+});
+
 test('secret-bearing writes fail without persistence or diagnostic leaks, including live Murmurplex tokens', async t => {
   const { root, directory, service, agents: [lead, worker], request } = await fixture(t);
   const providerKey = ['sk', 'proj', randomBytes(24).toString('base64url')].join('-');

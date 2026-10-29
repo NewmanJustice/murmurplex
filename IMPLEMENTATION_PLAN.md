@@ -260,7 +260,7 @@ Acceptance:
 - A devcontainer rebuild with persistent state recovers the record without
   surviving agent processes or old credentials.
 
-Status: schema version 5 and migration backups, explicit stale-lock recovery,
+Status: schema version 6 and migration backups, explicit stale-lock recovery,
 writer-ownership checks, interrupted-write cleanup and initial compaction are
 implemented and tested. Each write retains the newest 500 acknowledged messages
 and 500 decisions, without archival; unacknowledged messages are preserved and
@@ -284,6 +284,10 @@ Repository Explorer; it does not automatically alter task status or Git state.
 Handovers are regenerated from this saved record. In devcontainers, the
 project's `.murmurplex/state.json` must remain on the persistent workspace
 mount; runtime credentials remain outside that mount and are recreated.
+Messages can carry a validated optional task ID through the helper/API.
+Links survive recovery without changing task state or message visibility;
+reading remains separate from acknowledgement. Verified delivery tracking
+and automatic delivery remain unimplemented.
 
 ## 4. Coordination and delivery
 
@@ -424,9 +428,11 @@ is unverified. Nothing is automatically repaired and saved task status does
 not imply work is still running or complete. PR state remains unverified until
 milestone 5.
 
-Recommended next increment: enrich task records with priorities, acceptance
-criteria, dependencies, progress and blocker validation, then address local
-branch changes made outside Murmurplex without destructive repair.
+Task priorities, acceptance criteria, validated dependencies, progress,
+blockers and next actions are now persisted, and messages can link to existing
+tasks. Recommended next increment: define verified mailbox delivery tracking
+separately from queueing and acknowledgement, before adding provider-specific
+automatic delivery or idle wakeup.
 
 Other open v0.1 gates are richer task/recovery records, the remaining retention
 policy, interactive provider validation, devcontainer layout/rebuild recovery,

@@ -68,6 +68,31 @@ test('task branch and worktree references persist, update and reject invalid val
   assert.deepEqual(store.snapshot().tasks[0], updated);
 });
 
+test('message task links survive recovery without changing tasks or acknowledging mail', t => {
+  const directory = temporary(t);
+  let store = new Store(directory);
+  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const lead = store.register({ name: 'Lead', kind: 'shell' });
+  const worker = store.register({ name: 'Worker', kind: 'shell' });
+  const task = store.task({ title: 'Review recovery', ownerId: worker.id, status: 'review' });
+  const linked = store.send({ from: lead.id, to: worker.id, body: 'Review these changes', taskId: task.id });
+  const unlinked = store.send({ from: 'user', to: worker.id, body: 'General note' });
+  assert.equal(unlinked.taskId, null);
+  const before = fs.readFileSync(store.filename, 'utf8');
+  for (const taskId of ['', 'missing', 4, {}, []]) {
+    assert.throws(() => store.send({ from: lead.id, to: worker.id, body: 'Invalid link', taskId }), /taskId/);
+  }
+  assert.equal(fs.readFileSync(store.filename, 'utf8'), before);
+  store.close();
+  store = new Store(directory);
+  assert.equal(store.inbox(worker.id).find(message => message.id === linked.id).taskId, task.id);
+  assert.equal(store.inbox(worker.id).length, 2, 'reading does not acknowledge');
+  assert.deepEqual(store.snapshot().tasks[0], task, 'linking and recovery do not alter task status or ownership');
+  store.acknowledge(worker.id, linked.id);
+  assert.equal(store.snapshot().messages.find(message => message.id === linked.id).taskId, task.id);
+  assert.deepEqual(store.inbox(worker.id).map(message => message.id), [unlinked.id]);
+});
+
 test('task metadata persists and dependencies must reference existing tasks without cycles', t => {
   const directory = temporary(t);
   const store = new Store(directory);
@@ -428,6 +453,13 @@ test('agent helper reads refreshed credentials after a service restart and never
   assert.equal(clearedTask.progress, '');
   assert.equal(clearedTask.nextAction, '');
   assert.equal(clearedTask.blocker, null);
+  const linkedResult = await execFile(process.execPath, [helper, 'send-task', agent.id, task.id, 'Review', 'the changes'], { env: environment });
+  const linked = JSON.parse(linkedResult.stdout);
+  assert.equal(linked.taskId, task.id);
+  assert.equal(linked.body, 'Review the changes');
+  await assert.rejects(execFile(process.execPath, [helper, 'send-task', agent.id, 'missing', 'Invalid task'], { env: environment }), /taskId/);
+  await assert.rejects(execFile(process.execPath, [helper, 'send-task', agent.id], { env: environment }), /Use send-task/);
+  await execFile(process.execPath, [helper, 'ack', linked.id], { env: environment });
   const taskClear = await execFile(process.execPath, [helper, 'task', 'Tracked work', 'review', '-', task.id, '-', '-', '--clear-branch', '--clear-worktree'], { env: environment });
   assert.equal(JSON.parse(taskClear.stdout).branch, null);
   assert.equal(JSON.parse(taskClear.stdout).worktreePath, null);

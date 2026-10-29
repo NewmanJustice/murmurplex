@@ -6,7 +6,7 @@ const { randomUUID } = require('node:crypto');
 const { claudeEvent, applyClaudeEvent } = require('./claude');
 const { codexEvent, applyCodexEvent } = require('./codex');
 const { copilotEvent, applyCopilotEvent } = require('./copilot');
-const { CURRENT_VERSION, migrate, validateTaskRecords } = require('./migrations');
+const { CURRENT_VERSION, migrate, validateTaskRecords, validateMessageTask } = require('./migrations');
 const { assertNoSecrets, parseJSON } = require('./security');
 const STATES = new Set(['working', 'idle', 'needs-input', 'needs-permission', 'finished', 'disconnected', 'unknown']);
 const TASK_STATES = new Set(['backlog', 'in-progress', 'blocked', 'review', 'done']);
@@ -222,8 +222,10 @@ class Store {
   send(input) {
     if (input.from !== 'user') this.agent(input.from);
     this.agent(input.to); text(input.body, 'body');
+    const taskId = input.taskId === undefined ? null : input.taskId;
+    validateMessageTask(taskId, new Set(this.state.tasks.map(task => task.id)));
     return this.update(next => {
-      const message = { id: randomUUID(), from: input.from, to: input.to, body: input.body, createdAt: new Date().toISOString(), acknowledgedAt: null };
+      const message = { id: randomUUID(), from: input.from, to: input.to, body: input.body, taskId, createdAt: new Date().toISOString(), acknowledgedAt: null };
       next.messages.push(message); return message;
     });
   }
